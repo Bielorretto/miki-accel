@@ -25,9 +25,10 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel
 
+import dashboard
 import stats
 from base import changer_places, connecter
 
@@ -99,9 +100,89 @@ async def page_dihal():
     return FileResponse(STATIC / "dihal.html")
 
 
+# ---------- Vue écoutants 115 (page de dashboard.py : fiches, carte 3D, profils cliquables) ----------
+# En local, dashboard.py lit les fiches dans des fichiers écrits par l'agent. En ligne, l'agent et
+# le serveur sont deux conteneurs sans disque commun : la même page est servie ici, et /api/appels
+# lit les fiches dans PostgreSQL, au même format que les fichiers.
+
 @app.get("/ecoutants")
 async def page_ecoutants():
+    page = (dashboard.PAGE.replace("__MIKI_DEMO__", "true" if dashboard.DEMO else "false")
+            .replace("__LANGUES__", json.dumps(stats.LANGUES, ensure_ascii=False))
+            .replace("__DIHAL_URL__", json.dumps("/")))
+    return HTMLResponse(page, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/file-attente")
+async def page_file_attente():
+    """Ancienne vue : file de priorité d'un département et réglage des places."""
     return FileResponse(STATIC / "ecoutants.html")
+
+
+CARTE_TYPES = {".mjs": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
+               ".json": "application/json; charset=utf-8"}
+
+
+@app.get("/carte/{fichier}")
+async def carte(fichier: str):
+    chemin = STATIC / "carte" / fichier
+    if Path(fichier).suffix not in CARTE_TYPES or "/" in fichier or not chemin.is_file():
+        raise HTTPException(404, "introuvable")
+    return FileResponse(chemin, media_type=CARTE_TYPES[chemin.suffix])
+
+
+FICHES_DASHBOARD = """
+SELECT a.id, a.statut, a.debut, a.langue, f.maj, f.contenu, f.transcription, f.niveau_urgence
+FROM fiches f JOIN appels a ON a.id = f.appel_id
+WHERE {filtre}
+ORDER BY a.debut DESC LIMIT {limite}"""
+
+
+def fiche_dashboard(r) -> dict:
+    """Une fiche au format des fichiers JSON que lit la page écoutants (Thinker.dossier)."""
+    c = {k: v for k, v in (r["contenu"] or {}).items() if k != "consigne"}
+    return {**c, "id": str(r["id"]), "statut": r["statut"] if not c.get("dossier_cree") else "cree_pendant_appel",
+            "debut": r["debut"].isoformat(), "maj": r["maj"].isoformat(),
+            "langue": r["langue"] or c.get("langue"), "transcription": r["transcription"] or "",
+            "priorite": c.get("priorite") or {"score": r["niveau_urgence"] or 1, "niveau": "—", "motifs": []}}
+
+
+def par_priorite(fiches: list[dict]) -> list[dict]:
+    # les plus urgents d'abord, puis les plus récents (même tri que dashboard.py)
+    return sorted(fiches, key=lambda d: ((d.get("priorite") or {}).get("score", 0), d["debut"]), reverse=True)
+
+
+@app.get("/api/appels")
+async def api_appels():
+    async with app.state.pool.acquire() as conn:
+        en_cours = await conn.fetch(FICHES_DASHBOARD.format(
+            filtre="a.statut = 'en_cours' AND a.debut > now() - interval '3 hours'", limite=50))
+        dossiers = await conn.fetch(FICHES_DASHBOARD.format(
+            filtre="a.statut <> 'en_cours' OR f.contenu ? 'dossier_cree'", limite=60))
+    return {"en_cours": par_priorite([fiche_dashboard(r) for r in en_cours]),
+            "dossiers": par_priorite([fiche_dashboard(r) for r in dossiers])}
+
+
+@app.get("/api/dossiers/{appel_id}.json")
+async def telecharger_dossier(appel_id: uuid.UUID):
+    async with app.state.pool.acquire() as conn:
+        r = await conn.fetchrow(FICHES_DASHBOARD.format(filtre="a.id = $1", limite=1), appel_id)
+    if r is None:
+        raise HTTPException(404, "dossier introuvable")
+    return Response(json.dumps(fiche_dashboard(r), ensure_ascii=False, indent=2), media_type="application/json",
+                    headers={"Content-Disposition": f'attachment; filename="dossier-{appel_id}.json"'})
+
+
+@app.post("/api/dossiers/{appel_id}")
+async def creer_dossier(appel_id: uuid.UUID):
+    """« Créer le dossier » pendant l'appel : la fiche passe dans les dossiers sans attendre la fin."""
+    async with app.state.pool.acquire() as conn:
+        ok = await conn.fetchval(
+            "UPDATE fiches SET contenu = contenu || jsonb_build_object('dossier_cree', to_char(now(), "
+            "'YYYY-MM-DD\"T\"HH24:MI:SS')) WHERE appel_id = $1 RETURNING true", appel_id)
+    if not ok:
+        raise HTTPException(404, "appel introuvable")
+    return {"ok": True}
 
 
 @app.get("/sante")
