@@ -27,6 +27,11 @@
            background: var(--card); border: 1px solid var(--card-border); margin-bottom: 12px; }
   .fiche.securite { border-color: rgba(255,107,107,.6); box-shadow: 0 0 20px rgba(255,107,107,.12); }
   .fiche.sans-place { border-style: dashed; }
+  .badge.place-liberee { color: #0b1a1b; background: var(--teal); border-color: var(--teal); font-weight: 600; }
+  .toast { position: fixed; right: 24px; bottom: 24px; max-width: 360px; padding: 14px 18px; border-radius: 12px;
+           background: #0f2b2c; border: 1px solid var(--teal); color: var(--text, #e6efee); z-index: 10;
+           box-shadow: 0 8px 30px rgba(0,0,0,.4); animation: entree .25s ease-out; }
+  @keyframes entree { from { transform: translateY(12px); opacity: 0; } }
   .rang { font-size: 26px; font-weight: 600; text-align: center; font-variant-numeric: tabular-nums; }
   .rang small { display: block; font-size: 10px; color: var(--faint); font-weight: 400; }
   .ligne1 { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
@@ -122,6 +127,7 @@ function carte(f) {
         ${f.langue_couverte === false ? `<span class="badge alerte">langue non couverte</span>` : ""}
         ${f.securite ? `<span class="badge critique">règle de sécurité</span>` : ""}
         ${f.aucune_place ? `<span class="badge alerte">aucune place, orientation alternative</span>` : ""}
+        ${f.place_liberee && !f.aucune_place ? `<span class="badge place-liberee">place libérée : à rappeler</span>` : ""}
         ${f.en_cours ? `<span class="badge vivant">● appel en cours</span>` : ""}
         <span class="badge">${esc(PROFILS[f.profil] || "profil indéterminé")}</span>
         ${f.niveau_urgence ? `<span class="badge">urgence ${esc(URGENCE[f.niveau_urgence])}</span>` : ""}
@@ -153,13 +159,22 @@ function afficherPlaces(p) {
   }));
 }
 
+function alerter(texte) {
+  const t = document.createElement("div");
+  t.className = "toast"; t.textContent = texte;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 8000);
+}
+
 let attente = null;
 function connecterDirect() {
   const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
   const voyant = document.getElementById("direct");
   ws.onopen = () => voyant.classList.add("on");
   ws.onmessage = e => {
-    if (JSON.parse(e.data).departement !== dept) return;
+    const msg = JSON.parse(e.data);
+    if (msg.departement !== dept) return;
+    if (msg.alerte === "place_liberee") alerter(`Une place s'est libérée (${PROFILS[msg.profil] || msg.profil}) : un dossier en attente peut être rappelé.`);
     clearTimeout(attente); attente = setTimeout(charger, 300);
   };
   ws.onclose = () => { voyant.classList.remove("on"); setTimeout(connecterDirect, 3000); };

@@ -17,13 +17,19 @@ import os
 import re
 import statistics
 import time
+import wave
 from pathlib import Path
 
+import numpy as np
 from anthropic import AsyncAnthropic
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types as genai_types
+from livekit import rtc
 from openai import AsyncOpenAI
+from livekit.agents import room_io
+from livekit.agents.types import NOT_GIVEN
+from livekit.agents.utils import is_given
 from livekit.agents import (
     Agent,
     AgentServer,
@@ -38,11 +44,13 @@ from livekit.agents import (
     llm,
 )
 from livekit.plugins import deepgram, elevenlabs, groq, silero
+from livekit.plugins import anthropic as lk_anthropic
+from livekit.plugins import noise_cancellation
 from livekit.plugins import openai as lk_openai
 
 from priorite import compute_priority
 from prompts import GREETING_TEXT, TALKER_PROMPT, THINKER_PROMPT
-from suivi import SuiviAppel
+from suivi import LANGUES_PARLEES, SuiviAppel
 
 load_dotenv(Path(__file__).parent / ".env")
 logger = logging.getLogger("miki")
@@ -50,8 +58,8 @@ OUT_DIR = Path(__file__).parent / "sessions"
 LIVE_DIR = OUT_DIR / "en_cours"
 DOSSIERS_DIR = Path(__file__).parent / "dossiers"
 
-# filet de sécurité si le parleur écrit un numéro en chiffres ("115" serait lu "one one five")
-NUMEROS = {"115": "one hundred fifteen", "112": "one hundred twelve", "15": "fifteen", "17": "seventeen"}
+# filet de sécurité si le parleur écrit un numéro en chiffres ("115" serait lu "un un cinq")
+NUMEROS = {"115": "cent quinze", "112": "cent douze", "119": "cent dix-neuf", "15": "quinze", "17": "dix-sept"}
 NUMEROS_RE = re.compile(r"\b(" + "|".join(NUMEROS) + r")\b")
 
 
@@ -67,11 +75,29 @@ async def numeros_en_lettres(text):
         yield NUMEROS_RE.sub(lambda m: NUMEROS[m.group()], reste)
 
 
+# Gain de la voix de MIKI (MIKI_VOLUME, 1.0 = inchangé). ElevenLabs sort un niveau moyen bas
+# (-18 dBFS) mais des crêtes proches du maximum : un simple gain saturerait. La tangente
+# hyperbolique est un limiteur doux : quasi linéaire à bas niveau, elle arrondit les crêtes.
+VOLUME = float(os.environ.get("MIKI_VOLUME", "2.0"))
+
+
+def amplifier(frame: rtc.AudioFrame) -> rtc.AudioFrame:
+    if VOLUME == 1.0:
+        return frame
+    x = np.frombuffer(frame.data, dtype=np.int16).astype(np.float32) / 32768.0
+    y = np.tanh(x * VOLUME) * 32767.0
+    return rtc.AudioFrame(y.astype(np.int16).tobytes(), frame.sample_rate, frame.num_channels,
+                          frame.samples_per_channel)
+
+
 class Assistant115(Agent):
     """Agent d'accueil : aucun outil, il ne fait que poser des questions."""
 
     def __init__(self) -> None:
         super().__init__(instructions=TALKER_PROMPT)
+        # MIKI_ENREGISTRER_VOIX=1 : garde la voix générée pour la comparer à ce qu'entend l'appelant
+        self.voix: list[bytes] | None = [] if os.environ.get("MIKI_ENREGISTRER_VOIX") == "1" else None
+        self.voix_format = (16000, 1)
 
     async def llm_node(self, chat_ctx: ChatContext, tools, model_settings):
         # Mistral Large 4 se met à raisonner (réponse illisible en streaming) quand le dernier
@@ -81,14 +107,27 @@ class Assistant115(Agent):
             chat_ctx = chat_ctx.copy()
             chat_ctx.items[-1] = ChatMessage(
                 role="user",
-                content=[f"(Internal instruction, do not read it aloud) {last.text_content}"],
+                content=[f"(Consigne interne, ne pas la lire à voix haute) {last.text_content}"],
             )
         async for chunk in Agent.default.llm_node(self, chat_ctx, tools, model_settings):
             yield chunk
 
     async def tts_node(self, text, model_settings):
         async for frame in Agent.default.tts_node(self, numeros_en_lettres(text), model_settings):
+            frame = amplifier(frame)
+            if self.voix is not None:   # diagnostic : copie de la voix générée, avant tout transport
+                self.voix_format = (frame.sample_rate, frame.num_channels)
+                self.voix.append(bytes(frame.data))
             yield frame
+
+    def sauver_voix(self, chemin: Path) -> None:
+        if not self.voix:
+            return
+        with wave.open(str(chemin), "wb") as w:
+            w.setnchannels(self.voix_format[1])
+            w.setsampwidth(2)
+            w.setframerate(self.voix_format[0])
+            w.writeframes(b"".join(self.voix))
 
 
 # La grille de priorité (compute_priority) vit dans priorite.py, avec le classement par département.
@@ -159,7 +198,7 @@ class Thinker:
             "debut": self.debut,
             "maj": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "priorite": self.last.get("priorite"),
-            "langue": os.environ.get("STT_LANGUAGE", "en"),   # langue de l'appel, affichée sur la fiche
+            "langue": self.suivi.langue,   # langue de l'appelant, suivie pendant l'appel (affichée sur la fiche)
             **fiche,
             "transcription": self.transcript(),
         }
@@ -218,6 +257,7 @@ class Thinker:
         transcript = self.transcript()
         if not transcript:
             return
+        transcript = self.suivi.contexte_penseur() + transcript
         t0 = time.perf_counter()
         for model in self.models:
             try:
@@ -232,7 +272,7 @@ class Thinker:
         self.last["priorite"] = compute_priority(self.last.get("criteres", {}))
         self.publish()
         await self.suivi_pret
-        note_lieu = await self.suivi.maj(self.last, self.transcript())
+        await self.suivi.maj(self.last, self.transcript())
         prio = self.last["priorite"]
         logger.info(
             "🧠 penseur %s (%.1fs) priorité=%d (%s) | manque=%s | consigne=%s",
@@ -246,24 +286,30 @@ class Thinker:
         if final:
             return
 
-        fiche = {k: v for k, v in self.last.items() if k not in ("consigne", "infos_manquantes")}
-        await self.agent.update_instructions(
-            f"{TALKER_PROMPT}\n\nCURRENT RECORD (do not ask again for what is known): "
-            f"{json.dumps(fiche, ensure_ascii=False)}"
-            f"\nMISSING INFORMATION: {', '.join(self.last.get('infos_manquantes') or []) or 'none'}"
-            f"\n\nSUPERVISOR INSTRUCTION, TO FOLLOW FIRST in your next answer "
-            f"(unless the person just said something urgent): "
-            f"{self.last.get('consigne') or 'none'}"
-            + (f"\n\nLOCATION NOTE, TO HANDLE NOW: {note_lieu}" if note_lieu else "")
-        )
+        await self.mettre_a_jour_consignes()
 
         if self.last.get("criteres", {}).get("danger_vital") and not self.vital_alerted:
             self.vital_alerted = True
             logger.warning("🚨 DANGER VITAL détecté par le penseur")
             self.session.generate_reply(
-                instructions="Life-threatening danger detected: calmly tell the person to call "
-                "fifteen or one hundred twelve right now. Remind them you cannot call for them."
+                instructions="Danger immédiat détecté : dis calmement à la personne d'appeler tout de suite "
+                "le quinze ou le cent douze. Rappelle-lui que tu ne peux pas appeler à sa place."
             )
+
+
+    async def mettre_a_jour_consignes(self) -> None:
+        """Instructions du parleur : son prompt, la fiche, la consigne du penseur et les notes de la base."""
+        texte = TALKER_PROMPT
+        if self.last:
+            fiche = {k: v for k, v in self.last.items() if k not in ("consigne", "infos_manquantes")}
+            texte += (
+                f"\n\nFICHE ACTUELLE (ne redemande pas ce qui est connu) : {json.dumps(fiche, ensure_ascii=False)}"
+                f"\nINFORMATIONS MANQUANTES : {', '.join(self.last.get('infos_manquantes') or []) or 'aucune'}"
+                f"\n\nCONSIGNE DU SUPERVISEUR, À SUIVRE EN PRIORITÉ dans ta prochaine réponse "
+                f"(sauf si la personne vient de dire quelque chose d'urgent) : {self.last.get('consigne') or 'aucune'}")
+        if notes := self.suivi.notes_pour_miki():
+            texte += f"\n\nNOTES DE LA BASE DU CENT QUINZE (à suivre, chacune une seule fois) :\n{notes}"
+        await self.agent.update_instructions(texte)
 
 
 class LatencyLog:
@@ -301,17 +347,69 @@ class LatencyLog:
         return f"{len(e2e)} tours | P50={statistics.median(e2e):.0f}ms | P95={p95:.0f}ms"
 
 
+# langues fréquentes au 115, en ISO 639-3 (anglais, arabe, espagnol, portugais, roumain, russe,
+# ukrainien, turc, pachto, persan, tigrinya, wolof)
+LANGUES_SECONDAIRES = os.environ.get("STT_LANGUES_SECONDAIRES",
+                                     "eng,ara,spa,por,ron,rus,ukr,tur,pus,fas,tir,wol").split(",")
+
+
+HESITATIONS = re.compile(r"^(e+u+h*|h?e+m+|h?u+m+|a+h+|o+h+|b+e+n+|b+a+h+|э+|а+|у+|м+|ээ+)$", re.IGNORECASE)
+
+
+def vrais_mots(texte: str) -> int:
+    """Nombre de mots d'au moins deux lettres, sans les hésitations (« euh », « э-э-э »…)."""
+    mots = [m for m in re.findall(r"\w+", texte) if len(m) >= 2]
+    return sum(1 for m in mots if not HESITATIONS.match(m))
+
+
+def build_stt():
+    """Transcription de l'appelant : ElevenLabs Scribe (temps réel) ou Deepgram, selon STT_PROVIDER."""
+    langue = os.environ.get("STT_LANGUAGE", "en")
+    # l'audio d'un appel téléphonique est en 8 kHz : envoyer plus doublerait le débit montant
+    # sans rien apporter, et sature les petites connexions au détriment de la voix de MIKI
+    frequence = int(os.environ.get("STT_SAMPLE_RATE", "8000"))
+    if os.environ.get("STT_PROVIDER", "elevenlabs") == "elevenlabs":
+        # ElevenLabs détecte lui-même la fin de phrase (0,5 s de silence) : sur une ligne téléphonique
+        # bruitée, le VAD local ne voit jamais le silence et la phrase n'était validée que bien plus tard
+        silence = float(os.environ.get("STT_SILENCE_S", "0.5"))
+        return elevenlabs.STT(
+            model="scribe_v2_realtime", language_code=langue, sample_rate=frequence,
+            server_vad={"vad_silence_threshold_secs": silence, "min_silence_duration_ms": int(silence * 1000),
+                        "vad_threshold": float(os.environ.get("STT_VAD_SEUIL", "0.55"))},
+            # le français reste la langue attendue, mais ces langues sont reconnues et la langue
+            # entendue est signalée : MIKI suit l'appelant et on cherche un écoutant qui la parle
+            secondary_languages=LANGUES_SECONDAIRES, include_language_detection=True,
+        )
+    return deepgram.STT(model=os.environ.get("STT_MODEL", "nova-3"), language=langue, sample_rate=frequence)
+
+
 def build_tts():
     # clé lue dans ELEVEN_API_KEY ; voix par défaut : Sarah, voix « premade » utilisable en gratuit
     return elevenlabs.TTS(
         voice_id=os.environ.get("ELEVEN_VOICE_ID", "EXAVITQu4vr4xnSDxMaL"),
         model=os.environ.get("ELEVEN_MODEL", "eleven_flash_v2_5"),
         language=os.environ.get("TTS_LANGUAGE", "en"),
+        # audio brut plutôt que le MP3 32 kbit/s par défaut : au téléphone, la double compression
+        # (MP3 puis G.711 à 8 kHz) produit grésillements et son métallique
+        encoding=os.environ.get("ELEVEN_ENCODING", "pcm_16000"),
         # débit de parole : 0.8 (lent) → 1.2 (rapide), 1.0 = normal
         voice_settings=elevenlabs.VoiceSettings(
             stability=0.5, similarity_boost=0.75, speed=float(os.environ.get("ELEVEN_SPEED", "0.9"))
         ),
     )
+
+
+class ClaudeVoix(lk_anthropic.LLM):
+    """Claude pour la voix de MIKI : sans réflexion et à effort bas, la première syllabe arrive vite.
+
+    Le plugin LiveKit n'expose pas ces réglages : on les ajoute à chaque requête.
+    """
+
+    def chat(self, *, extra_kwargs=NOT_GIVEN, **kwargs):
+        extra = {"thinking": {"type": "disabled"}, "output_config": {"effort": "low"}}
+        if is_given(extra_kwargs):
+            extra.update(extra_kwargs)
+        return super().chat(extra_kwargs=extra, **kwargs)
 
 
 def build_llm():
@@ -329,6 +427,11 @@ def build_llm():
                 # sans ça Large 4 raisonne avant de parler : lent, et format illisible en streaming
                 reasoning_effort="none",
             ))
+            continue
+        # "claude:<modèle>" passe par l'API Anthropic (clé ANTHROPIC_API_KEY) ; pas de temperature,
+        # refusée par les modèles Claude récents
+        if model.startswith("claude:"):
+            llms.append(ClaudeVoix(model=model.split(":", 1)[1], max_tokens=400, caching="ephemeral"))
             continue
         # "gemini:<modèle>" passe par l'API Gemini compatible OpenAI
         if model.startswith("gemini:"):
@@ -350,8 +453,26 @@ def build_llm():
     return llms[0] if len(llms) == 1 else llm.FallbackAdapter(llms)
 
 
+def reduction_bruit(params):
+    """Supprime le bruit ET les voix de fond de l'appelant avant la transcription (LiveKit BVC).
+
+    Sans ça, dans la rue ou un hall de gare, les conversations autour sont prises pour la voix de
+    l'appelant : MIKI attend qu'il « finisse » (longs silences) et répond à des phrases qui ne lui
+    sont pas adressées. Modèle téléphonique pour les appels SIP. NOISE_CANCELLATION=off pour couper.
+    """
+    if os.environ.get("NOISE_CANCELLATION", "bvc") == "off":
+        return None
+    if params.participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
+        return noise_cancellation.BVCTelephony()
+    return noise_cancellation.BVC()
+
+
 def prewarm(proc: JobProcess) -> None:
-    proc.userdata["vad"] = silero.VAD.load()
+    # moins sensible que par défaut (0,5 et 50 ms) : un bruit bref ne passe plus pour de la parole
+    proc.userdata["vad"] = silero.VAD.load(
+        activation_threshold=float(os.environ.get("VAD_SEUIL", "0.6")),
+        min_speech_duration=float(os.environ.get("VAD_PAROLE_MIN_S", "0.15")),
+    )
 
 
 # laisse le temps à l'analyse finale du penseur avant de couper le process
@@ -365,18 +486,20 @@ async def entrypoint(ctx: JobContext) -> None:
                            "le détecteur de fin de tour LiveKit Cloud ne peut pas tourner")
     session = AgentSession(
         vad=ctx.proc.userdata["vad"],
-        stt=deepgram.STT(
-            model=os.environ.get("STT_MODEL", "nova-3"),
-            language=os.environ.get("STT_LANGUAGE", "en"),
-        ),
+        stt=build_stt(),
         llm=build_llm(),
         tts=build_tts(),
         turn_handling={
-            # "v1" tourne sur LiveKit Cloud avec les clés du .env (meilleur modèle que le
-            # "v1-mini" local) ; si le cloud échoue, repli automatique sur le local
-            "turn_detection": inference.TurnDetector(version="v1"),
-            # patient avec les pauses : jusqu'à 3 s si la phrase semble inachevée
-            "endpointing": {"min_delay": 0.4, "max_delay": 3.0},
+            # "v1-mini" tourne sur la machine ; "v1" (LiveKit Cloud) est meilleur mais demande un
+            # aller-retour réseau à chaque fin de phrase : sur une connexion faible il dépasse 1 s
+            "turn_detection": inference.TurnDetector(version=os.environ.get("TURN_DETECTOR", "v1-mini")),
+            # attente après la fin de la phrase : min_delay si elle semble finie, max_delay sinon.
+            # 3 s de max faisait attendre 3 s après chaque réponse courte (« oui », « vingt ans ») ;
+            # la transcription ElevenLabs a déjà attendu 0,5 s de silence avant
+            "endpointing": {
+                "min_delay": float(os.environ.get("FIN_DE_TOUR_MIN_S", "0.2")),
+                "max_delay": float(os.environ.get("FIN_DE_TOUR_MAX_S", "1.0")),
+            },
             # pas de barge-in : Miki finit toujours sa phrase, le bruit ambiant ne la coupe plus
             # (ce qui est dit pendant qu'elle parle est ignoré)
             "interruption": {"enabled": False, "discard_audio_if_uninterruptible": True},
@@ -398,9 +521,46 @@ async def entrypoint(ctx: JobContext) -> None:
             # le numéro arrive dans les attributs du participant SIP ; il n'est jamais stocké en clair
             participant = await ctx.wait_for_participant()
             await suivi.ouvrir(participant.attributes.get("sip.phoneNumber"))
+            await thinker.mettre_a_jour_consignes()   # appelant déjà connu : MIKI le sait dès le début
         finally:
             suivi_pret.set_result(None)
     thinker = Thinker(session, agent, call_id, suivi, suivi_pret)
+
+    async def _changer_langue(langue: str) -> None:
+        await suivi_pret
+        await suivi.changer_langue(langue)
+        if langue in LANGUES_PARLEES:   # sinon la voix reste en français (note dans suivi)
+            session.tts.update_options(language=langue)
+        await thinker.mettre_a_jour_consignes()
+
+    detection = {"langue": None, "fois": 0}
+
+    @session.on("user_input_transcribed")
+    def _on_transcription(ev) -> None:
+        """Le français reste la langue de l'appel tant que l'appelant n'a pas clairement parlé une autre langue.
+
+        La détection se trompe sur les hésitations et les phrases courtes (un « euh… ouais » a déjà été
+        pris pour du russe) : il faut deux phrases d'affilée dans la même langue étrangère, d'au moins
+        quatre vrais mots. Une seule phrase en français suffit pour y revenir.
+        """
+        langue = getattr(ev.language, "language", None) if ev.language else None
+        if not ev.is_final or not langue:
+            return
+        mots = vrais_mots(ev.transcript)
+        if langue == suivi.langue:
+            detection.update(langue=None, fois=0)
+            return
+        if langue == "fr":
+            if mots >= 3:
+                asyncio.create_task(_changer_langue("fr"))
+            return
+        if mots < 4:
+            return
+        detection["fois"] = detection["fois"] + 1 if detection["langue"] == langue else 1
+        detection["langue"] = langue
+        if detection["fois"] >= 2:
+            detection.update(langue=None, fois=0)
+            asyncio.create_task(_changer_langue(langue))
     latency = LatencyLog()
 
     @session.on("conversation_item_added")
@@ -431,6 +591,7 @@ async def entrypoint(ctx: JobContext) -> None:
         DOSSIERS_DIR.mkdir(exist_ok=True)
         (DOSSIERS_DIR / f"{call_id}.json").write_text(json.dumps(appel, ensure_ascii=False, indent=2))
         (LIVE_DIR / f"{call_id}.json").unlink(missing_ok=True)
+        agent.sauver_voix(OUT_DIR / f"{call_id}-voix.wav")
         await suivi_pret
         await suivi.clore()
         logger.info("📋 Dossier créé :\n%s", json.dumps(appel, ensure_ascii=False, indent=2))
@@ -438,11 +599,14 @@ async def entrypoint(ctx: JobContext) -> None:
 
     ctx.add_shutdown_callback(_save)
 
-    await session.start(agent=agent, room=ctx.room, record=False)
+    await session.start(
+        agent=agent, room=ctx.room, record=False,
+        room_options=room_io.RoomOptions(audio_input=room_io.AudioInputOptions(noise_cancellation=reduction_bruit)),
+    )
     asyncio.create_task(_ouvrir_suivi())
     # l'accueil passe aussi par le parleur Mistral : tout ce que dit Miki vient de lui
     session.generate_reply(
-        instructions=f"Start of the call: greet the person with this exact message, word for word: "
+        instructions=f"Début de l'appel : accueille la personne avec ce message exact, mot pour mot : "
         f"\"{GREETING_TEXT}\""
     )
 

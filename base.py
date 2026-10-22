@@ -29,9 +29,16 @@ CLE_VERSION = 1
 
 
 async def connecter() -> tuple[asyncpg.Pool, valkey.Valkey]:
-    pool = await asyncpg.create_pool(os.environ["DATABASE_URL"], min_size=1, max_size=5,
+    # Aiven (plan Developer) limite à 15 connexions : chaque appel et le serveur web ont leur pool,
+    # on reste petit pour tenir plusieurs appels simultanés
+    pool = await asyncpg.create_pool(os.environ["DATABASE_URL"], min_size=1,
+                                     max_size=int(os.environ.get("DB_POOL_MAX", "3")),
                                      init=_codecs)
-    vk = valkey.from_url(os.environ["VALKEY_URL"], decode_responses=True)
+    # pas de délai de lecture : le relais pub/sub du serveur attend des messages pendant des minutes,
+    # et un délai le faisait couper toutes les 5 s sur Aiven ; un ping toutes les 30 s garde la
+    # connexion vivante et détecte une coupure réelle
+    vk = valkey.from_url(os.environ["VALKEY_URL"], decode_responses=True, socket_timeout=None,
+                         socket_connect_timeout=10, socket_keepalive=True, health_check_interval=30)
     return pool, vk
 
 
@@ -72,6 +79,10 @@ async def classer_fiche(conn: asyncpg.Connection, vk: valkey.Valkey, fiche_id) -
 
     change = (d.profil, d.rang, d.securite, d.aucune_place) != (
         f["profil"], f["rang"], f["securite"], f["aucune_place"])
+    # dossier en attente faute de place, et une place vient de se libérer pour son profil
+    place_liberee = bool(f["aucune_place"]) and not d.aucune_place and f["en_file"]
+    if place_liberee:
+        await conn.execute("UPDATE fiches SET place_liberee_le = now() WHERE id = $1", fiche_id)
     if change or not await conn.fetchval("SELECT 1 FROM decisions_priorite WHERE fiche_id = $1", fiche_id):
         await conn.execute(
             "UPDATE fiches SET profil = $2, rang = $3, securite = $4, aucune_place = $5, maj = now() "
@@ -88,7 +99,10 @@ async def classer_fiche(conn: asyncpg.Connection, vk: valkey.Valkey, fiche_id) -
         await vk.zadd(f"file:{dept}", {str(fiche_id): score_file(d.rang, arrivee_ms)})
     else:
         await vk.zrem(f"file:{dept}", str(fiche_id))
-    await vk.publish(f"fiches:{dept}", json.dumps({"fiche": str(fiche_id), "rang": d.rang}))
+    evenement = {"fiche": str(fiche_id), "rang": d.rang}
+    if place_liberee:
+        evenement |= {"alerte": "place_liberee", "profil": d.profil}
+    await vk.publish(f"fiches:{dept}", json.dumps(evenement))
 
 
 async def reclasser_departement(conn: asyncpg.Connection, vk: valkey.Valkey, dept: str) -> None:
