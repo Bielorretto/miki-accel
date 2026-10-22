@@ -1,5 +1,7 @@
 # Étape : carte interactive, météo et hébergements dans le tableau de bord des écoutants
 
+> **Mise à jour** : la météo a ensuite été retirée du panneau (voir [navigation-langue-scenarios.md](navigation-langue-scenarios.md)).
+
 > **Mise à jour** : la carte Leaflet décrite ici a ensuite été remplacée par une carte 3D MapLibre au thème DIHAL.
 > Voir [carte-3d-theme-dihal.md](carte-3d-theme-dihal.md). La logique décrite ci-dessous (synchronisation,
 > géocodage, météo, hébergements, mode démo) reste valable.

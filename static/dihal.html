@@ -41,6 +41,16 @@
     padding: 5px 12px; border-radius: 999px; cursor: pointer;
   }
   .filtres button.actif { background: rgba(95, 212, 196, .14); color: var(--text); }
+  /* barre de navigation entre la vue écoutants (dashboard.py) et cette vue */
+  .marque-nav { display: flex; align-items: center; gap: 14px; }
+  .marque-nav .mention { color: var(--faint); font-size: 12px; }
+  nav.vues { display: flex; gap: 4px; padding: 3px; border: 1px solid var(--card-border); border-radius: 999px; }
+  nav.vues a { color: var(--muted); font-size: 12px; padding: 5px 14px; border-radius: 999px; text-decoration: none; }
+  nav.vues a:hover { color: var(--text); }
+  nav.vues a.actif { background: rgba(95, 212, 196, .14); color: var(--text); box-shadow: inset 0 0 0 1px rgba(95, 212, 196, .35); }
+  nav.vues a, .filtres button, .kpis-globaux span, .marque-nav .mention { white-space: nowrap; }
+  @media (max-width: 1750px) { .marque-nav .mention { display: none; } }
+  @media (max-width: 1450px) { .kpis-globaux { display: none; } }
   .direct { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
   .direct i { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
   .direct.on i { background: var(--teal); box-shadow: 0 0 8px var(--teal); }
@@ -70,6 +80,20 @@
   }
   .dept.hors-zone { border-style: dashed; background: transparent; }
   .dept.estompe { opacity: .15; }
+  /* filtre région : les départements de la région s'allument, les autres s'effacent */
+  .dept.hors-region { opacity: .18; }
+  .dept.en-region { border-color: rgba(95, 212, 196, .85); box-shadow: 0 0 16px rgba(95, 212, 196, .28), inset 0 0 12px rgba(95, 212, 196, .12); }
+  .dept.en-region .num { color: var(--teal-clair); }
+  svg.liens path.region { stroke: rgba(95, 212, 196, .55); stroke-width: 1.5; filter: drop-shadow(0 0 4px rgba(95, 212, 196, .7)); }
+  .filtre-region { background: rgba(255,255,255,.04); border: 1px solid var(--card-border); border-radius: 999px;
+                   color: var(--text); font: inherit; font-size: 12px; padding: 5px 12px; cursor: pointer; }
+  .filtre-region option { background: var(--surface); }
+  .filtre-region.actif { border-color: rgba(95, 212, 196, .7); box-shadow: 0 0 10px rgba(95, 212, 196, .2); }
+  .resume-region { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 2; font-size: 12px;
+                   color: var(--muted); padding: 6px 14px; border-radius: 999px; border: 1px solid rgba(95, 212, 196, .4);
+                   background: rgba(8, 22, 24, .8); white-space: nowrap; }
+  .resume-region b { color: var(--teal-clair); font-weight: 600; }
+  .resume-region[hidden] { display: none; }
   .dept .num { display: block; font-size: 15px; font-weight: 600; line-height: 1.1; }
   .dept .n { display: block; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; margin-top: 2px; }
   .dept.hors-zone .n { color: var(--faint); }
@@ -150,9 +174,15 @@
 <body>
 
 <header>
-  <div><b>MIKI</b> · Tableau de bord DIHAL <span style="color:var(--faint)">— lecture seule, données anonymes</span></div>
+  <div class="marque-nav"><b>MIKI</b>
+    <nav class="vues" aria-label="Vues">
+      <a id="lien-ecoutants" href="#">Écoutants 115</a>
+      <a href="/" class="actif" aria-current="page">Tableau de bord DIHAL</a>
+    </nav>
+    <span class="mention">lecture seule · données anonymes</span></div>
   <div class="kpis-globaux" id="kpis"></div>
   <div style="display:flex;gap:14px;align-items:center">
+    <select class="filtre-region" id="region" aria-label="Filtrer par région"><option value="">Toutes les régions</option></select>
     <input class="recherche" id="recherche" type="search" placeholder="Rechercher un département…" aria-label="Rechercher un département">
     <div class="filtres" role="group" aria-label="Source des données">
       <button data-source="tous" class="actif">Tout</button>
@@ -201,6 +231,8 @@
 <div class="legende"><span>Moins d'appels</span><span class="rampe"></span><span>Plus d'appels</span>
   <span style="margin-left:10px">· pointillés : non couvert par MIKI</span></div>
 
+<div class="resume-region" id="resume-region" hidden></div>
+
 <aside class="panneau" id="panneau" aria-live="polite">
   <button class="fermer" id="fermer">Fermer ✕</button>
   <div id="contenu"></div>
@@ -212,6 +244,28 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt
 const fmt = n => n === null || n === undefined ? "<5" : n.toLocaleString("fr-FR");
 const duree = s => s ? `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, "0")}` : "—";
 let source = "tous", selection = null;
+// vue écoutants : dashboard.py, sur la même machine (port 8115 par défaut)
+document.getElementById("lien-ecoutants").href = `${location.protocol}//${location.hostname}:8115/`;
+let departements = [];   // dernière liste chargée, pour le résumé par région
+
+// régions administratives (2016) → départements ; la base ne stocke pas la région
+const REGIONS = {
+  "Auvergne-Rhône-Alpes": ["01", "03", "07", "15", "26", "38", "42", "43", "63", "69", "73", "74"],
+  "Bourgogne-Franche-Comté": ["21", "25", "39", "58", "70", "71", "89", "90"],
+  "Bretagne": ["22", "29", "35", "56"],
+  "Centre-Val de Loire": ["18", "28", "36", "37", "41", "45"],
+  "Corse": ["2A", "2B"],
+  "Grand Est": ["08", "10", "51", "52", "54", "55", "57", "67", "68", "88"],
+  "Hauts-de-France": ["02", "59", "60", "62", "80"],
+  "Île-de-France": ["75", "77", "78", "91", "92", "93", "94", "95"],
+  "Normandie": ["14", "27", "50", "61", "76"],
+  "Nouvelle-Aquitaine": ["16", "17", "19", "23", "24", "33", "40", "47", "64", "79", "86", "87"],
+  "Occitanie": ["09", "11", "12", "30", "31", "32", "34", "46", "48", "65", "66", "81", "82"],
+  "Pays de la Loire": ["44", "49", "53", "72", "85"],
+  "Provence-Alpes-Côte d'Azur": ["04", "05", "06", "13", "83", "84"],
+  "Guadeloupe": ["971"], "Martinique": ["972"], "Guyane": ["973"], "La Réunion": ["974"], "Mayotte": ["976"],
+};
+const REGION_DE = Object.fromEntries(Object.entries(REGIONS).flatMap(([r, codes]) => codes.map(c => [c, r])));
 
 // ---------- Infobulle ----------
 const bulle = document.getElementById("infobulle");
@@ -228,7 +282,7 @@ const gauche = document.getElementById("gauche"), droite = document.getElementBy
 const liens = document.getElementById("liens"), logo = document.getElementById("logo");
 
 async function chargerDepartements() {
-  const depts = await (await fetch(`/api/dihal/departements?source=${source}`)).json();
+  const depts = departements = await (await fetch(`/api/dihal/departements?source=${source}`)).json();
   gauche.innerHTML = droite.innerHTML = "";
   // ordre administratif : la Corse (2A, 2B) se range entre le 19 et le 21
   const cle = c => c.replace("2A", "20.1").replace("2B", "20.2");
@@ -253,6 +307,7 @@ async function chargerDepartements() {
   });
   filtrer();
   tracerLiens();
+  surlignerRegion();
   const global = await (await fetch(`/api/dihal/stats?source=${source}`)).json();
   const r = global.resume;
   document.getElementById("kpis").innerHTML = global.masque
@@ -269,6 +324,27 @@ function filtrer() {
   document.querySelectorAll(".dept").forEach(el => el.classList.toggle("estompe", !!q && !el.dataset.recherche.includes(q)));
 }
 champ.addEventListener("input", filtrer);
+
+// ---------- Filtre région : surbrillance des départements et de leurs liens vers l'œil ----------
+const choixRegion = document.getElementById("region"), resumeRegion = document.getElementById("resume-region");
+choixRegion.innerHTML += Object.keys(REGIONS).map(r => `<option>${esc(r)}</option>`).join("");
+function surlignerRegion() {
+  const region = choixRegion.value;
+  choixRegion.classList.toggle("actif", !!region);
+  document.querySelectorAll(".dept").forEach(el => {
+    const dedans = !!region && REGION_DE[el.dataset.code] === region;
+    el.classList.toggle("en-region", dedans);
+    el.classList.toggle("hors-region", !!region && !dedans);
+  });
+  liens.querySelectorAll("path").forEach(p => p.classList.toggle("region", !!region && REGION_DE[p.dataset.code] === region));
+  resumeRegion.hidden = !region;
+  if (!region) return;
+  const ds = departements.filter(d => REGION_DE[d.code] === region), couverts = ds.filter(d => d.couvert);
+  const appels = couverts.reduce((n, d) => n + (d.appels || 0), 0);
+  resumeRegion.innerHTML = `<b>${esc(region)}</b> · ${ds.length} département${ds.length > 1 ? "s" : ""}`
+    + ` · ${couverts.length} couvert${couverts.length > 1 ? "s" : ""} par MIKI · ${fmt(appels)} appels`;
+}
+choixRegion.addEventListener("change", surlignerRegion);
 champ.addEventListener("keydown", e => {
   if (e.key !== "Enter") return;
   const premier = document.querySelector(".dept:not(.estompe)");
@@ -292,7 +368,7 @@ function tracerLiens() {
     liens.appendChild(p);
   });
 }
-addEventListener("resize", tracerLiens);
+addEventListener("resize", () => { tracerLiens(); surlignerRegion(); });
 
 // ---------- Panneau de statistiques d'un département ----------
 const panneau = document.getElementById("panneau"), contenu = document.getElementById("contenu");

@@ -159,6 +159,7 @@ class Thinker:
             "debut": self.debut,
             "maj": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "priorite": self.last.get("priorite"),
+            "langue": os.environ.get("STT_LANGUAGE", "en"),   # langue de l'appel, affichée sur la fiche
             **fiche,
             "transcription": self.transcript(),
         }

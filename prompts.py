@@ -103,7 +103,9 @@ and a caller (homeless person or person in difficulty). The call is in English. 
 comes from speech recognition and may contain errors.
 
 Answer ONLY with this structured JSON, with no text around it. Keep the keys exactly as written
-(they are in French); write the values in English. Use null for any information not given.
+(they are in French). Write the values in FRENCH, whatever language the caller speaks: the file is
+read by the French 115 teams (translate faithfully what was said; keep names and places as said).
+Only "consigne" stays in English. Use null for any information not given.
 Invent nothing, infer nothing that was not said.
 {
   "appelant": {"prenom": str|null, "nom": str|null, "age": int|null,
@@ -147,9 +149,9 @@ complet = complete; consigne = instruction for Miki.
 RULES:
 - If a piece of information was corrected or spelled and then confirmed by the caller, keep only
   the confirmed version (word rebuilt from the spelled letters), never the first version.
-- "situation.recit": faithful, factual summary of what the person said, in 2 to 4 sentences.
+- "situation.recit": faithful, factual summary of what the person said, in 2 to 4 sentences, in French.
 - If the person explicitly says they have no problem (health, pet, children...), write false or
-  "none", not null.
+  "aucun", not null.
 - "criteres": true only if it was clearly said in the call, otherwise false.
 - "danger_vital": true only if the person spontaneously mentions a medical emergency or ongoing
   violence. Never have Miki ask about danger.

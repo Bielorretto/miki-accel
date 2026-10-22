@@ -1,11 +1,9 @@
-// Logique géographique du panneau carte : géocodage IGN, météo Open-Meteo, hébergements proches.
+// Logique géographique du panneau carte : géocodage et itinéraires IGN, hébergements proches.
 // Aucun accès au DOM ici : panneau.mjs s'occupe de l'affichage, les tests Node importent ce module.
 // Seul le texte du lieu (localisation, commune) ou des coordonnées partent vers les API : jamais de nom, d'âge ni de récit.
 
 const IGN = "https://data.geopf.fr/geocodage/search";
-const OPEN_METEO = "https://api.open-meteo.com/v1/forecast";
 const IGN_ITINERAIRE = "https://data.geopf.fr/navigation/itineraire";
-const METEO_TTL_MS = 10 * 60 * 1000;
 const DELAI_RESEAU_MS = 8000;
 
 // mots de liaison ignorés pour comparer le lieu dit et les résultats (la fiche est souvent en anglais)
@@ -20,12 +18,17 @@ export function normaliser(texte) {
 
 const mots = texte => normaliser(texte).split(" ").filter(m => m && !MOTS_VIDES.has(m));
 
-// texte envoyé à l'IGN : les tournures anglaises (« near the », « outside ») le perturbent
+// tournures qui entourent le lieu dit (« je suis près de la… », « near the… ») : elles perturbent l'IGN
+const AUTOUR_FR = /(^|[\s,])(je suis|je me trouve|actuellement|pr[eè]s d(?:e|u|es)|devant|derri[eè]re|[àa] c[oô]t[ée] d(?:e|u|es)|en face d(?:e|u|es)|vers|autour d(?:e|u|es)|au niveau d(?:e|u|es))(?=[\s,'’]|$)/gi;
+const AUTOUR_EN = /\b(i'?m|i am|currently|right now|near(by)?|next to|in front of|outside( of)?|around|close to|behind|opposite|at|the)\b/gi;
+
+// texte envoyé à l'IGN : le lieu seul, suivi de la commune si elle n'y figure pas
 export function requeteLieu(localisation, commune) {
-  const lieu = String(localisation ?? "")
-    .replace(/\b(i'?m|i am|currently|right now|near(by)?|next to|in front of|outside( of)?|around|close to|behind|opposite|at|the)\b/gi, " ")
-    .replace(/\b(train )?station\b/gi, " ")
+  const brut = String(localisation ?? "");
+  let lieu = brut.replace(AUTOUR_FR, "$1 ").replace(AUTOUR_EN, " ").replace(/\b(train )?station\b/gi, " ")
     .replace(/\s+/g, " ").replace(/^[\s,]+|[\s,]+$/g, "");
+  // « près de la gare… » → « gare… » : l'article n'est retiré que s'il suivait une tournure
+  if (lieu !== brut.trim()) lieu = lieu.replace(/^(?:la |le |les |l['’]\s*|'\s*)/i, "");
   const ville = String(commune ?? "").trim();
   if (!lieu) return ville;
   return ville && !normaliser(lieu).includes(normaliser(ville)) ? `${lieu}, ${ville}` : lieu;
@@ -117,71 +120,39 @@ export async function geocoder(localisation, commune, { signal, reference } = {}
   return resultat;
 }
 
-// ---------- météo ----------
-
-// codes WMO d'Open-Meteo → libellé et icône
-const WMO = [
-  [[0], "ciel dégagé", "☀️"], [[1], "peu nuageux", "🌤️"], [[2], "partiellement nuageux", "⛅"],
-  [[3], "couvert", "☁️"], [[45, 48], "brouillard", "🌫️"], [[51, 53, 55], "bruine", "🌦️"],
-  [[56, 57], "bruine verglaçante", "🌧️"], [[61, 63, 65], "pluie", "🌧️"], [[66, 67], "pluie verglaçante", "🧊"],
-  [[71, 73, 75, 77], "neige", "🌨️"], [[80, 81, 82], "averses", "🌦️"], [[85, 86], "averses de neige", "🌨️"],
-  [[95], "orage", "⛈️"], [[96, 99], "orage avec grêle", "⛈️"],
-];
-export function conditions(code) {
-  const t = WMO.find(([codes]) => codes.includes(code));
-  return t ? { libelle: t[1], icone: t[2] } : { libelle: "inconnu", icone: "❔" };
-}
-
-// réponse Open-Meteo → ce que la carte météo affiche (les 8 prochaines heures)
-export function lireMeteo(d) {
-  const c = d.current, h = d.hourly;
-  const heureCourante = c.time.slice(0, 13);
-  const debut = Math.max(0, h.time.findIndex(t => t.slice(0, 13) >= heureCourante));
-  return {
-    temperature: c.temperature_2m, ressenti: c.apparent_temperature, humidite: c.relative_humidity_2m,
-    precipitation: c.precipitation, vent: c.wind_speed_10m, ...conditions(c.weather_code), heure: c.time,
-    prevision: h.time.slice(debut + 1, debut + 9).map((t, i) => ({
-      heure: t.slice(11, 16), temperature: h.temperature_2m[debut + 1 + i],
-      pluie: h.precipitation_probability[debut + 1 + i],
-    })),
-    simulee: false,
-  };
-}
-
-const cacheMeteo = new Map();
-
-export async function meteo(lat, lon, signal) {
-  const cle = `${lat.toFixed(2)},${lon.toFixed(2)}`;   // ~1 km : inutile de redemander pour quelques mètres
-  const enCache = cacheMeteo.get(cle);
-  if (enCache && Date.now() - enCache.t < METEO_TTL_MS) return enCache.meteo;
-  const params = new URLSearchParams({
-    latitude: lat.toFixed(4), longitude: lon.toFixed(4),
-    current: "temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,weather_code,wind_speed_10m",
-    hourly: "temperature_2m,precipitation_probability", forecast_days: "2", timezone: "Europe/Paris",
-  });
-  const m = lireMeteo(await getJson(`${OPEN_METEO}?${params}`, signal));
-  cacheMeteo.set(cle, { t: Date.now(), meteo: m });
-  return m;
-}
-
-// mode démo uniquement, si Open-Meteo ne répond pas : valeurs fixes, signalées comme simulées à l'écran
-export function meteoSimulee() {
-  const h = new Date().getHours();
-  return {
-    temperature: 4, ressenti: 1, humidite: 88, precipitation: 0.6, vent: 18, ...conditions(61), heure: null,
-    prevision: Array.from({ length: 8 }, (_, i) => ({
-      heure: `${String((h + i + 1) % 24).padStart(2, "0")}:00`, temperature: 4 - Math.min(i, 3), pluie: 70 - i * 5,
-    })),
-    simulee: true,
-  };
-}
-
 // ---------- hébergements ----------
 
-// à vol d'oiseau, dans le rayon, du plus proche au plus éloigné
-export function hebergementsProches(position, hebergements, rayonKm) {
+// catégories de places ; chaque centre n'accueille que certaines d'entre elles
+export const CATEGORIES = { femmes: "Femmes", familles: "Familles avec enfants", hommes: "Hommes" };
+
+// places d'un centre pour une catégorie (ou toutes, si categorie est null)
+export function places(h, categorie) {
+  const cats = categorie ? [categorie] : Object.keys(h.places || {});
+  return cats.reduce((t, c) => {
+    const p = h.places?.[c];
+    return p ? { total: t.total + p.total, disponibles: t.disponibles + p.disponibles } : t;
+  }, { total: 0, disponibles: 0 });
+}
+
+// catégorie à présélectionner d'après la fiche : enfants → familles, puis sexe ; l'écoutant peut en changer
+export function categorieDeFiche(fiche) {
+  const cas = fiche?.cas_particuliers || {}, criteres = fiche?.criteres || {};
+  if (cas.nb_enfants > 0 || cas.ages_enfants?.length || criteres.enfants_presents) return "familles";
+  const sexe = fiche?.appelant?.sexe;
+  if (sexe === "femme" || cas.grossesse || criteres.grossesse) return "femmes";
+  if (sexe === "homme") return "hommes";
+  return null;
+}
+
+// à vol d'oiseau, dans le rayon, du plus proche au plus éloigné ; avec une catégorie,
+// seuls les centres qui l'accueillent, et les places de cette catégorie
+export function hebergementsProches(position, hebergements, rayonKm, categorie = null) {
   return hebergements
-    .map(h => ({ ...h, distance: distanceKm(position, { lat: h.latitude, lon: h.longitude }) }))
+    .filter(h => !categorie || h.places?.[categorie])
+    .map(h => {
+      const p = places(h, categorie);
+      return { ...h, distance: distanceKm(position, { lat: h.latitude, lon: h.longitude }), disponibles: p.disponibles, capacite: p.total };
+    })
     .filter(h => h.distance <= rayonKm)
     .sort((a, b) => a.distance - b.distance);
 }
