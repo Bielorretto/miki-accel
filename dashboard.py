@@ -4,8 +4,8 @@ L'agent écrit la fiche de chaque appel dans sessions/en_cours/ à chaque analys
 en fin d'appel elle devient un dossier dans dossiers/. Cette page relit ces fichiers chaque
 seconde. Le bouton « Créer le dossier » fige la fiche d'un appel encore en cours.
 
-À droite, la carte 3D suit la fiche sélectionnée (static/carte/) : lieu géocodé par l'IGN, météo
-Open-Meteo, hébergements fictifs proches, trajet à pied IGN vers le centre que l'écoutant choisit.
+À droite, la carte 3D suit la fiche sélectionnée (static/carte/) : lieu géocodé par l'IGN,
+hébergements fictifs proches, trajet à pied IGN vers le centre que l'écoutant choisit.
 MIKI_DEMO=1 ajoute trois scénarios sans appel réel.
 
 Lancer :  python dashboard.py      puis ouvrir http://localhost:8115
@@ -19,6 +19,8 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from stats import LANGUES
+
 ROOT = Path(__file__).parent
 LIVE_DIR = ROOT / "sessions" / "en_cours"
 DOSSIERS_DIR = ROOT / "dossiers"
@@ -26,6 +28,8 @@ CARTE_DIR = ROOT / "static" / "carte"
 TYPES = {".mjs": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
          ".json": "application/json; charset=utf-8"}
 DEMO = os.environ.get("MIKI_DEMO", "").lower() in ("1", "true", "oui")
+# vue DIHAL (serveur.py) ; vide : même machine, port 8000
+DIHAL_URL = os.environ.get("DIHAL_URL", "")
 PORT = int(os.environ.get("DASHBOARD_PORT", "8115"))
 ID_RE = re.compile(r"^[\w-]+$")
 
@@ -60,7 +64,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/":
-            page = PAGE.replace("__MIKI_DEMO__", "true" if DEMO else "false")
+            page = (PAGE.replace("__MIKI_DEMO__", "true" if DEMO else "false")
+                    .replace("__LANGUES__", json.dumps(LANGUES, ensure_ascii=False))
+                    .replace("__DIHAL_URL__", json.dumps(DIHAL_URL)))
             self._send(200, page.encode(), "text/html; charset=utf-8")
         elif (m := re.fullmatch(r"/carte/([\w-]+(\.mjs|\.css|\.json))", self.path)) and (CARTE_DIR / m.group(1)).is_file():
             self._send(200, (CARTE_DIR / m.group(1)).read_bytes(), TYPES[m.group(2)])
@@ -122,20 +128,25 @@ PAGE = r"""<!doctype html>
   header .etat i { width: 7px; height: 7px; border-radius: 50%; background: var(--teal); box-shadow: 0 0 8px var(--teal); }
   header .etat.hs i { background: var(--faint); box-shadow: none; }
   main { padding: 20px 28px 48px; max-width: 1840px; margin: 0 auto;
-         display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 24px; align-items: start; }
-  .panneau { position: sticky; top: 0; max-height: 100vh; overflow-y: auto; padding-bottom: 16px; }
-  .panneau > h2 { margin-top: 28px; }
-  .demo { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; margin-left: auto; font-size: 12px; color: var(--muted);
-          padding: 3px 3px 3px 12px; border: 1px solid rgba(245,195,91,.35); border-radius: 999px; }
-  .demo[hidden] { display: none; }
-  .demo b { color: var(--or); font-weight: 600; margin-right: 6px; letter-spacing: .04em; }
-  .demo button { border: 0; border-radius: 999px; background: none; color: var(--muted); font-size: 12px; padding: 5px 12px; }
-  .demo button:hover { background: rgba(245,195,91,.12); color: var(--ink); }
-  .badge-demo { font-size: 11px; font-weight: 600; color: var(--or); border: 1px dashed rgba(245,195,91,.6);
-                border-radius: 999px; padding: 1px 8px; }
+         display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px; align-items: start; }
+  /* carte et hébergements : seulement quand l'écoutant a sélectionné une fiche */
+  .panneau { display: none; position: sticky; top: 0; max-height: 100vh; overflow-y: auto; padding-bottom: 16px; }
+  body.avec-panneau main { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); }
+  body.avec-panneau .panneau { display: block; animation: apparait .35s ease-out; }
+  body.avec-panneau .grille { grid-template-columns: 1fr; }
+  @keyframes apparait { from { opacity: 0; transform: translateX(12px); } }
+  .panneau-haut { display: flex; justify-content: space-between; align-items: center; margin: 28px 0 12px; }
+  .panneau-haut h2 { margin: 0; }
+  .aide { font-size: 13px; color: var(--faint); margin: -4px 0 12px; }
+  body.avec-panneau .aide { display: none; }
+  /* barre de navigation entre les deux vues, même dessin que les filtres de la page DIHAL */
+  nav.vues { display: flex; gap: 4px; padding: 3px; border: 1px solid var(--line); border-radius: 999px; margin-left: auto; }
+  nav.vues a { color: var(--muted); font-size: 13px; padding: 6px 16px; border-radius: 999px; text-decoration: none; }
+  nav.vues a:hover { color: var(--ink); }
+  nav.vues a.actif { background: rgba(95,212,196,.14); color: var(--ink); box-shadow: inset 0 0 0 1px rgba(95,212,196,.35); }
   h2 { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .12em; color: var(--muted);
        margin: 28px 0 12px; }
-  .grille { display: grid; grid-template-columns: 1fr; gap: 14px; }
+  .grille { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 14px; }
   .carte { background: var(--card); border: 1px solid var(--line); border-radius: 14px; cursor: pointer;
            padding: 16px 18px; border-left: 3px solid var(--pc, var(--p1)); transition: border-color .15s, box-shadow .2s; }
   .carte:hover { border-color: rgba(245,195,91,.45); border-left-color: var(--pc, var(--p1)); }
@@ -165,7 +176,7 @@ PAGE = r"""<!doctype html>
   button.prim { background: rgba(95,212,196,.16); border-color: rgba(95,212,196,.55); color: var(--ink); }
   .aucun { color: var(--faint); padding: 20px; border: 1px dashed var(--line); border-radius: 14px; font-size: 14px; }
   @media (max-width: 1000px) {
-    main { grid-template-columns: minmax(0, 1fr); }
+    body.avec-panneau main { grid-template-columns: minmax(0, 1fr); }
     .panneau { position: static; order: -1; max-height: none; overflow: visible; }
   }
   @media (max-width: 600px) {
@@ -187,38 +198,62 @@ PAGE = r"""<!doctype html>
 <header>
   <h1><b>MIKI</b> · Écoutants du 115</h1>
   <span class="etat" id="etat"><i></i>connexion…</span>
-  <div class="demo" id="demo" hidden>
-    <b>MODE DÉMO</b>
-    <button data-scenario="A">A · Gare de Lyon</button>
-    <button data-scenario="B">B · République</button>
-    <button data-scenario="C">C · Gare du Nord</button>
-    <button data-scenario="">Retirer</button>
-  </div>
+  <nav class="vues" aria-label="Vues">
+    <a href="/" class="actif" aria-current="page">Écoutants 115</a>
+    <a id="lien-dihal" href="#">Tableau de bord DIHAL</a>
+  </nav>
 </header>
 <main>
   <div>
     <h2>Appels en cours</h2>
+    <p class="aide">Sélectionnez une fiche pour afficher le lieu et les hébergements proches.</p>
     <div class="grille" id="en_cours"></div>
     <h2>Dossiers créés</h2>
     <div class="grille" id="dossiers"></div>
   </div>
   <aside class="panneau">
-    <h2>Lieu, météo et hébergements</h2>
+    <div class="panneau-haut"><h2>Lieu et hébergements</h2>
+      <button type="button" data-fermer title="Échap">Fermer ✕</button></div>
     <div class="panneau-carte" id="panneau-carte"></div>
   </aside>
 </main>
 <script>
 const DEMO = __MIKI_DEMO__ || new URLSearchParams(location.search).has("demo");
-// scénarios joués dans la page seulement : rien n'est écrit dans sessions/ ni dossiers/.
-// secours : coordonnées fixes si le géocodage IGN est injoignable pendant la démo.
-const SCENARIOS = {
-  A: {localisation: "near the Gare de Lyon train station", secours: {lat: 48.8443, lon: 2.3744}},
-  B: {localisation: "Place de la République", secours: {lat: 48.8674, lon: 2.3636}},
-  C: {localisation: "outside Gare du Nord", secours: {lat: 48.8809, lon: 2.3553}},
-};
-let demo = null;       // fiche fictive du scénario en cours
-let selection = null;  // fiche suivie par la carte
-let fiches = [];       // dernières fiches affichées (démo, en cours, dossiers)
+const LANGUES = __LANGUES__;
+document.getElementById("lien-dihal").href = __DIHAL_URL__ || `${location.protocol}//${location.hostname}:8000/`;
+
+// MIKI_DEMO=1 : trois fiches de scénario ajoutées aux appels en cours, dans la page seulement
+// (rien n'est écrit dans sessions/ ni dossiers/). Profils et langues différents : homme seul en anglais,
+// famille en arabe, femme seule en français ; la fiche reste en français. Priorités calculées par la vraie
+// grille (priorite.py) pour ces critères. secours : coordonnées fixes si le géocodage IGN est injoignable.
+const ilYa = min => { const d = new Date(Date.now() - min * 60000 - new Date().getTimezoneOffset() * 60000); return d.toISOString().slice(0, 19); };
+const SCENARIOS = !DEMO ? [] : [
+  {id: "scenario-a", demo: true, langue: "en", debut: ilYa(14), maj: ilYa(1),
+   appelant: {prenom: "Karim", nom: null, age: 42, sexe: "homme"},
+   situation: {recit: "A perdu son emploi puis sa chambre la semaine dernière. A dormi devant la gare cette nuit.", temps_a_la_rue: "une semaine"},
+   localisation: "près de la gare de Lyon", commune: "Paris", cas_particuliers: {},
+   criteres: {sans_solution_ce_soir: true}, priorite: {score: 2, niveau: "moyenne", motifs: ["sans_solution_ce_soir"]},
+   infos_manquantes: ["nom"], secours: {lat: 48.8443, lon: 2.3744},
+   transcription: "APPELANT: I'm near the Gare de Lyon. I lost my job and my room last week, I slept outside the station last night."},
+  {id: "scenario-b", demo: true, langue: "ar", debut: ilYa(9), maj: ilYa(0),
+   appelant: {prenom: "Amina", nom: null, age: 31, sexe: "femme"},
+   situation: {recit: "Expulsée de son logement ce matin avec ses deux enfants. Pas de famille à Paris, aucune solution pour ce soir.", temps_a_la_rue: "depuis ce matin"},
+   localisation: "place de la République", commune: "Paris", cas_particuliers: {nb_enfants: 2, ages_enfants: [4, 7]},
+   criteres: {enfants_presents: true, sans_solution_ce_soir: true},
+   priorite: {score: 4, niveau: "très haute", motifs: ["enfants_presents", "sans_solution_ce_soir"]},
+   infos_manquantes: ["nom"], secours: {lat: 48.8674, lon: 2.3636},
+   transcription: "APPELANT: أنا في ساحة الجمهورية مع طفليّ. طُردنا من البيت هذا الصباح وليس لدينا مكان للنوم."},
+  {id: "scenario-c", demo: true, langue: "fr", debut: ilYa(5), maj: ilYa(0),
+   appelant: {prenom: "Julie", nom: null, age: 24, sexe: "femme"},
+   situation: {recit: "A quitté ce soir l'appartement de son compagnon après une dispute. Seule, avec un petit sac. Première nuit dehors.", temps_a_la_rue: "ce soir"},
+   localisation: "devant la gare du Nord", commune: "Paris", cas_particuliers: {},
+   criteres: {premiere_nuit_rue: true, sans_solution_ce_soir: true},
+   priorite: {score: 3, niveau: "haute", motifs: ["premiere_nuit_rue", "sans_solution_ce_soir"]},
+   infos_manquantes: ["nom", "cause"], secours: {lat: 48.8809, lon: 2.3553},
+   transcription: "APPELANT: Je suis devant la gare du Nord, je ne sais pas où dormir ce soir."},
+];
+let selection = null;  // fiche suivie par la carte : aucune tant que l'écoutant n'en choisit pas
+let fiches = [];       // dernières fiches affichées (en cours, scénarios, dossiers)
 const COULEURS = {5: "var(--p5)", 4: "var(--p4)", 3: "var(--p3)", 2: "var(--p2)", 1: "var(--p1)"};
 const CAS = {grossesse: "Grossesse", handicap: "Handicap", blessure: "Blessure", sante: "Santé",
              nb_enfants: "Enfants", ages_enfants: "Âges enfants",
@@ -253,9 +288,10 @@ function carte(d, live) {
     </div>
     <div class="haut" style="margin-top:4px;font-size:13px;color:var(--muted)">
       <span>${live ? '<span class="live">en direct</span> · ' : ""}début ${heure(d.debut)} · maj ${heure(d.maj)}</span>
-      <span>${d.demo ? '<span class="badge-demo">DÉMO · fiche fictive</span>' : d.valide ? "validé par l'appelant" : ""}</span>
+      <span>${d.valide ? "validé par l'appelant" : ""}</span>
     </div>
     <dl>
+      <dt>Langue de l'appel</dt><dd>${val(LANGUES[d.langue] || d.langue)}</dd>
       <dt>Âge</dt><dd>${val(a.age)}</dd>
       <dt>Sexe</dt><dd>${val(a.sexe)}</dd>
       <dt>Localisation</dt><dd>${val(d.localisation)}</dd>
@@ -266,7 +302,7 @@ function carte(d, live) {
     </dl>
     ${p.motifs && p.motifs.length ? `<div class="motifs">Motifs : ${esc(p.motifs.join(", ").replaceAll("_", " "))}</div>` : ""}
     <details data-id="${tid}" ${ouverts.has(tid) ? "open" : ""}>
-      <summary>Transcription</summary><pre>${esc(d.transcription) || "…"}</pre>
+      <summary>Transcription</summary><pre dir="auto">${esc(d.transcription) || "…"}</pre>
     </details>
     ${d.demo ? "" : `<div class="actions">
       ${live ? `<button class="prim" data-creer="${esc(d.id)}">Créer le dossier</button>`
@@ -281,26 +317,34 @@ function remplir(el, liste, live) {
     : `<div class="aucun">${live ? "Aucun appel en cours." : "Aucun dossier pour l'instant."}</div>`;
 }
 
-// la carte suit la fiche choisie ; sans choix, l'appel en cours le plus urgent
+// la carte suit la fiche que l'écoutant a sélectionnée ; sans sélection, le panneau est masqué.
+// Le panneau (et la carte 3D) n'est créé qu'à la première sélection.
 function suivreSelection() {
-  if (!fiches.some(d => d.id === selection)) selection = fiches[0] ? fiches[0].id : null;
+  if (!fiches.some(d => d.id === selection)) selection = null;   // fiche disparue
   document.querySelectorAll(".carte[data-sel]").forEach(c => c.classList.toggle("selectionnee", c.dataset.sel === selection));
-  const d = fiches.find(f => f.id === selection);
-  if (window.panneauCarte) window.panneauCarte.suivre(d ? {id: d.id, localisation: d.localisation, commune: d.commune, secours: d.secours} : null);
+  document.body.classList.toggle("avec-panneau", !!selection);
+  const d = fiches.find(f => f.id === selection) || null;
+  if (d && !window.panneauCarte && window.creerPanneauCarte)
+    window.panneauCarte = window.creerPanneauCarte(document.getElementById("panneau-carte"));
+  window.panneauCarte?.suivre(d);
+}
+
+function selectionner(id) {   // id null : fermer le panneau (bouton « Fermer » ou Échap)
+  selection = id;
+  suivreSelection();
 }
 
 async function rafraichir() {
   try {
     const r = await fetch("/api/appels");
     const data = await r.json();
-    const en_cours = demo ? [demo, ...data.en_cours] : data.en_cours;
+    const en_cours = [...data.en_cours, ...SCENARIOS];
     fiches = [...en_cours, ...data.dossiers];
-    if (!fiches.some(d => d.id === selection)) selection = fiches[0] ? fiches[0].id : null;
     remplir(document.getElementById("en_cours"), en_cours, true);
     remplir(document.getElementById("dossiers"), data.dossiers, false);
     const etat = document.getElementById("etat");
     etat.className = "etat";
-    etat.innerHTML = `<i></i>direct · ${data.en_cours.length} en cours · ${data.dossiers.length} dossiers · ${new Date().toLocaleTimeString("fr-FR")}`;
+    etat.innerHTML = `<i></i>direct · ${en_cours.length} en cours · ${data.dossiers.length} dossier${data.dossiers.length > 1 ? "s" : ""}`;
     suivreSelection();
   } catch {
     const etat = document.getElementById("etat");
@@ -314,32 +358,14 @@ document.addEventListener("toggle", e => {
   if (id) e.target.open ? ouverts.add(id) : ouverts.delete(id);
 }, true);
 
-function jouerScenario(code) {
-  if (!code) { demo = null; return rafraichir(); }
-  const sc = SCENARIOS[code], maintenant = new Date().toISOString().slice(0, 19);
-  // comme pendant un vrai appel : la fiche arrive d'abord sans lieu, puis le lieu est extrait
-  demo = {id: "demo-scenario", demo: true, debut: maintenant, maj: maintenant, commune: null, localisation: null,
-          appelant: {prenom: "Scénario", nom: code}, situation: {recit: "Fiche fictive de démonstration."},
-          infos_manquantes: ["localisation"], transcription: "", secours: sc.secours};
-  selection = demo.id;
-  rafraichir();
-  setTimeout(() => {
-    if (!demo || demo.appelant.nom !== code) return;
-    Object.assign(demo, {localisation: sc.localisation, commune: "Paris", infos_manquantes: [], maj: new Date().toISOString().slice(0, 19),
-                         transcription: `APPELANT: I'm ${sc.localisation}.`});
-    rafraichir();
-  }, 1500);
-}
-
-if (DEMO) document.getElementById("demo").hidden = false;
 
 document.addEventListener("click", async e => {
   const b = e.target.closest("button");
   const choisie = !b && !e.target.closest("details, a") && e.target.closest(".carte[data-sel]");
-  if (choisie) { selection = choisie.dataset.sel; return suivreSelection(); }
+  if (choisie) return selectionner(choisie.dataset.sel);
   if (!b) return;
-  if (b.dataset.scenario !== undefined) {
-    jouerScenario(b.dataset.scenario);
+  if (b.hasAttribute("data-fermer")) {
+    selectionner(null);
   } else if (b.dataset.creer) {
     b.disabled = true;
     const r = await fetch(`/api/dossiers/${b.dataset.creer}`, {method: "POST"});
@@ -353,6 +379,8 @@ document.addEventListener("click", async e => {
   }
 });
 
+addEventListener("keydown", e => { if (e.key === "Escape" && selection) selectionner(null); });
+
 rafraichir();
 setInterval(rafraichir, 1000);
 </script>
@@ -360,7 +388,7 @@ setInterval(rafraichir, 1000);
         integrity="sha384-5+cfbwT0iiub6VsQAdn6yz16nr6sDiQoHx6tm4O8OVYXHYOxcffFmCJBL0dgdvGp" crossorigin="anonymous"></script>
 <script type="module">
   import { creerPanneau } from "/carte/panneau.mjs";
-  window.panneauCarte = creerPanneau(document.getElementById("panneau-carte"), {demo: DEMO});
+  window.creerPanneauCarte = creerPanneau;
   suivreSelection();
 </script>
 </body>

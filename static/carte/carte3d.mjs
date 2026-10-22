@@ -1,9 +1,10 @@
 // Carte 3D du panneau écoutant (MapLibre GL + tuiles vectorielles OpenFreeMap, sans clé).
 // Uniquement l'affichage : panneau.mjs décide quoi montrer, ce module dessine.
-//   bâtiments extrudés aux couleurs du tableau de bord DIHAL, faisceaux lumineux sur la personne et les centres,
+//   bâtiments extrudés aux couleurs du tableau de bord DIHAL, faisceaux lumineux sur la personne et les centres
+//   (centres et places : jeu fictif static/carte/demo_hebergements.json),
 //   zone de recherche en anneau holographique, trajet à pied animé, étiquettes HUD reliées aux marqueurs.
 
-import { cercle, formatDistance, formatDuree } from "./geo.mjs";
+import { CATEGORIES, cercle, formatDistance, formatDuree } from "./geo.mjs";
 
 const STYLE = "https://tiles.openfreemap.org/styles/dark";
 const PARIS = [2.3522, 48.8566];
@@ -154,7 +155,7 @@ export async function creerCarte3d(conteneur, { surChoix } = {}) {
   // ---------- marqueurs HTML (étiquettes HUD) ----------
   let marqueurPersonne = null, position = null, rayon = 5;
   const marqueurs = new Map();
-  let liste = [], choisi = null;
+  let liste = [], choisi = null, categorie = null;
 
   function elementPersonne(libelle) {
     const el = document.createElement("div");
@@ -168,23 +169,26 @@ export async function creerCarte3d(conteneur, { surChoix } = {}) {
 
   // étiquette HUD ; pour le centre choisi, elle fait office de fiche détaillée (pas de popup qui masquerait le trajet)
   function etiquetteHeb(h, detail, route) {
-    const places = h.availablePlaces > 0 ? `${h.availablePlaces} place${h.availablePlaces > 1 ? "s" : ""} fictive${h.availablePlaces > 1 ? "s" : ""}` : "complet (fictif)";
+    const qui = categorie ? ` ${CATEGORIES[categorie].toLowerCase()}` : "";
+    const places = h.disponibles > 0 ? `${h.disponibles} place${h.disponibles > 1 ? "s" : ""}${qui}` : `complet${qui}`;
     const trajet = !detail ? "" : route
       ? `<span class="m3d-trajet">${route.volOiseau ? "≈ " : ""}${formatDuree(route.dureeS)} à pied · ${formatDistance(route.distanceM / 1000)}${route.volOiseau ? " (vol d'oiseau)" : ""}</span>`
       : `<span class="m3d-trajet">calcul du trajet…</span>`;
-    const fiche = detail ? `<span class="m3d-detail">${esc(h.type)}<br>${esc(h.public || "")}${h.accessible ? " · ♿ PMR" : ""}<br>${esc(h.address)}</span>
-      <em class="m3d-fictif">Donnée de démonstration, non réelle</em>` : "";
-    return `<small>Hébergement fictif · ${formatDistance(h.distance)}</small><b>${esc(h.name)}</b><span>${places} / ${h.capacity}</span>${fiche}${trajet}`;
+    const parCategorie = Object.entries(h.places || {})
+      .map(([c, p]) => `${CATEGORIES[c]} : ${p.disponibles}/${p.total}`).join("<br>");
+    const fiche = detail ? `<span class="m3d-detail">${esc(h.type)}${h.accessible ? " · ♿ PMR" : ""}<br>${esc(h.address)}</span>
+      <span class="m3d-detail m3d-categories">${parCategorie}</span>` : "";
+    return `<small>Hébergement · ${formatDistance(h.distance)}</small><b>${esc(h.name)}</b><span>${places} / ${h.capacite}</span>${fiche}${trajet}`;
   }
 
   function dessinerFaisceaux() {
     const f = [];
     if (position) f.push(polygone([cercle(position, 0.022, 24)], { couleur: C.personne, h: 420 }));
     for (const h of liste) {
-      const libre = h.availablePlaces > 0;
+      const libre = h.disponibles > 0;
       f.push(polygone([cercle({ lat: h.latitude, lon: h.longitude }, h.id === choisi ? 0.022 : 0.016, 16)], {
         couleur: h.id === choisi ? C.or : libre ? C.libre : C.complet,
-        h: libre ? 110 + 22 * h.availablePlaces : 55,
+        h: libre ? 110 + 22 * h.disponibles : 55,
       }));
     }
     carte.getSource("faisceaux").setData(collection(f));
@@ -236,10 +240,10 @@ export async function creerCarte3d(conteneur, { surChoix } = {}) {
     },
 
     // centres du rayon, triés par distance : les trois plus proches et le centre choisi ont leur étiquette
-    hebergements(nouvelle, route) {
-      liste = nouvelle;
+    hebergements(nouvelle, route, cat = null) {
+      liste = nouvelle; categorie = cat;
       const ids = new Set(liste.map(h => h.id));
-      const etiquetes = new Set([liste[0]?.id, ...liste.filter(h => h.availablePlaces > 0).slice(0, 2).map(h => h.id)].filter(Boolean));
+      const etiquetes = new Set([liste[0]?.id, ...liste.filter(h => h.disponibles > 0).slice(0, 2).map(h => h.id)].filter(Boolean));
       for (const [id, m] of marqueurs) if (!ids.has(id)) { m.remove(); marqueurs.delete(id); }
       liste.forEach((h, i) => {
         let m = marqueurs.get(h.id);
@@ -254,8 +258,8 @@ export async function creerCarte3d(conteneur, { surChoix } = {}) {
         // étiquettes permanentes : les deux centres avec places les plus proches, le plus proche, et le centre choisi
         const etiquetee = h.id === choisi || etiquetes.has(h.id);
         el.classList.add("m3d", "heb");   // classList : MapLibre garde ses propres classes de positionnement
-        el.classList.toggle("libre", h.availablePlaces > 0);
-        el.classList.toggle("complet", h.availablePlaces === 0);
+        el.classList.toggle("libre", h.disponibles > 0);
+        el.classList.toggle("complet", h.disponibles === 0);
         el.classList.toggle("etiquetee", etiquetee);
         el.classList.toggle("choisi", h.id === choisi);
         el.style.setProperty("--tige", `${[48, 88, 128][[...etiquetes].indexOf(h.id) % 3] ?? 60}px`);

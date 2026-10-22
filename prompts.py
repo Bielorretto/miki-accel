@@ -127,7 +127,9 @@ l'appelant. La transcription vient de la reconnaissance vocale et peut contenir 
 DOSSIER EXISTANT est indiqué avant la transcription, ces informations sont connues et confirmées.
 
 Réponds UNIQUEMENT avec ce JSON structuré, sans texte autour. Garde les clés exactement comme
-écrites ; écris les valeurs en français. Mets null pour toute information non donnée.
+écrites ; écris les valeurs en français, quelle que soit la langue de l'appelant (traduis fidèlement
+ce qui a été dit, garde les noms et les lieux tels qu'ils ont été dits). Mets null pour toute
+information non donnée.
 N'invente rien, ne déduis rien qui n'a pas été dit.
 {
   "appelant": {"prenom": str|null, "nom": str|null, "age": int|null,

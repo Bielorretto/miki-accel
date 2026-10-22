@@ -1,11 +1,12 @@
-// Panneau de l'écoutant : carte 3D, météo du lieu, hébergements fictifs proches, trajet à pied vers le centre choisi.
+// Panneau de l'écoutant : carte 3D, hébergements proches par catégorie de places, trajet à pied
+// vers le centre choisi. Les centres et leurs places viennent du jeu fictif static/carte/demo_hebergements.json.
 // Il suit la fiche sélectionnée du tableau de bord : creerPanneau(racine).suivre({id, localisation, commune}).
 // Il ne modifie jamais la fiche : la correction de lieu reste locale à l'écran de l'écoutant,
 // et aucun centre n'est choisi automatiquement : le trajet n'apparaît que sur clic de l'écoutant.
 
 import { creerCarte3d } from "./carte3d.mjs";
 import {
-  formatDistance, formatDuree, geocoder, hebergementsProches, itineraire, ligneDroite, meteo, meteoSimulee, normaliser, requeteLieu,
+  CATEGORIES, categorieDeFiche, formatDistance, formatDuree, geocoder, hebergementsProches, itineraire, ligneDroite, normaliser, requeteLieu,
 } from "./geo.mjs";
 import { creerOeil } from "./oeil.mjs";
 
@@ -15,7 +16,7 @@ const RAYONS = [2, 5, 10];
 const PARIS = { lat: 48.8566, lon: 2.3522 };   // vue d'attente et départage des homonymes, jamais un marqueur
 const QUALITES = {
   precise: ["précise", "ok"], approximative: ["approximative", "alerte"], ambigue: ["ambiguë, à vérifier", "alerte"],
-  choisie: ["choisie par l'écoutant", "ok"], secours: ["coordonnées de secours (démo)", "alerte"],
+  choisie: ["choisie par l'écoutant", "ok"], secours: ["position approximative", "alerte"],
 };
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -28,6 +29,12 @@ const GABARIT = `
       <b data-r="declaree">—</b><span data-r="statut" class="pc-statut"></span></div>
     <div class="pc-rayons" role="group" aria-label="Rayon de recherche">
       ${RAYONS.map(r => `<button type="button" data-rayon="${r}">${r} km</button>`).join("")}</div>
+  </div>
+  <div class="pc-categories" role="group" aria-label="Catégorie de places">
+    <span class="pc-etiquette">Places</span>
+    <button type="button" data-cat="">Toutes</button>
+    ${Object.entries(CATEGORIES).map(([c, lib]) => `<button type="button" data-cat="${c}">${lib}</button>`).join("")}
+    <span data-r="cat-auto" class="pc-cat-auto"></span>
   </div>
   <div data-r="alternatives" class="pc-alternatives" hidden></div>
   <form data-r="correction" class="pc-correction" hidden>
@@ -46,26 +53,26 @@ const GABARIT = `
     </div>
     <div class="pc-legende">
       <span><i class="pc-pt personne"></i>Personne (lieu déclaré)</span>
-      <span><i class="pc-pt libre"></i>Places fictives</span>
-      <span><i class="pc-pt complet"></i>Complet (fictif)</span>
+      <span><i class="pc-pt libre"></i>Places disponibles</span>
+      <span><i class="pc-pt complet"></i>Complet</span>
       <span><i class="pc-pt trajet"></i>Trajet à pied</span>
     </div>
   </div>
   <div class="pc-bas">
-    <section data-r="meteo" class="pc-meteo"></section>
     <section class="pc-liste-cadre">
-      <div class="pc-fictif">Hébergements et disponibilités fictifs — démonstration hackathon</div>
+      <h3 data-r="titre-liste" class="pc-titre-liste">Hébergements proches</h3>
       <div data-r="liste" class="pc-liste"></div>
     </section>
   </div>`;
 
-export function creerPanneau(racine, { demo = false, hebergementsUrl = "/carte/demo_hebergements.json" } = {}) {
+export function creerPanneau(racine, { hebergementsUrl = "/carte/demo_hebergements.json" } = {}) {
   racine.innerHTML = GABARIT;
   const $ = nom => racine.querySelector(`[data-r="${nom}"]`);
   const e = {
     dossierId: null, cle: null, texte: null, commune: null, secours: null, correction: null,
-    position: null, statut: "attente", meteo: null, meteoStatut: null, rayon: 2,   // 2 km : la vue où la 3D se lit le mieux
+    position: null, statut: "attente", rayon: 2,   // 2 km : la vue où la 3D se lit le mieux
     choisi: null, route: null,   // centre cliqué par l'écoutant et trajet à pied vers lui
+    categorie: null, categorieFiche: null, categorieManuelle: false,   // catégorie de places affichée
   };
   let hebergements = [];
   let jeton = 0, minuteur = null, controleur = null, jetonRoute = 0, controleurRoute = null;
@@ -80,14 +87,14 @@ export function creerPanneau(racine, { demo = false, hebergementsUrl = "/carte/d
       if (e.position) { carte.placer(e.position, e.rayon, libelleCourt()); majCarteHebergements(); } else carte.attente();
     })
     .catch(err => {
-      $("carte").innerHTML = `<div class="pc-indispo">Carte 3D indisponible (${esc(err.message)}).<br>La météo et la liste restent à jour.</div>`;
+      $("carte").innerHTML = `<div class="pc-indispo">Carte 3D indisponible (${esc(err.message)}).<br>La liste des hébergements reste à jour.</div>`;
     });
 
   fetch(hebergementsUrl).then(r => r.json()).then(h => { hebergements = h; dessinerHebergements(); })
-    .catch(() => { $("liste").innerHTML = `<div class="pc-discret">Jeu de démonstration des hébergements introuvable.</div>`; });
+    .catch(() => { $("liste").innerHTML = `<div class="pc-discret">Liste des hébergements indisponible.</div>`; });
 
   const libelleCourt = () => e.position ? e.position.libelle.split(",")[0] : "";
-  const proches = () => e.position ? hebergementsProches(e.position, hebergements, e.rayon) : [];
+  const proches = () => e.position ? hebergementsProches(e.position, hebergements, e.rayon, e.categorie) : [];
 
   // ---------- affichage ----------
   function afficherLieu() {
@@ -112,6 +119,8 @@ export function creerPanneau(racine, { demo = false, hebergementsUrl = "/carte/d
     $("correction").hidden = !e.dossierId;
     $("annuler").hidden = e.correction === null;
     racine.querySelectorAll("[data-rayon]").forEach(b => b.classList.toggle("actif", +b.dataset.rayon === e.rayon));
+    racine.querySelectorAll("[data-cat]").forEach(b => b.classList.toggle("actif", (b.dataset.cat || null) === e.categorie));
+    $("cat-auto").textContent = e.categorieFiche && !e.categorieManuelle ? "d'après la fiche" : "";
     const alt = e.position?.alternatives || [];
     $("alternatives").hidden = !alt.length;
     $("alternatives").innerHTML = alt.length ? `<span>Autres lieux possibles :</span>` + alt.map((a, i) =>
@@ -124,16 +133,16 @@ export function creerPanneau(racine, { demo = false, hebergementsUrl = "/carte/d
     const hud = $("hud");
     hud.hidden = !e.position;
     if (!e.position) return;
-    const liste = proches(), libres = liste.filter(h => h.availablePlaces > 0).length;
+    const liste = proches(), libres = liste.filter(h => h.disponibles > 0).length;
     hud.innerHTML = `<span><small>Position</small>${coord(e.position.lat, "N", "S")} · ${coord(e.position.lon, "E", "O")}</span>
       <span><small>Rayon</small>${e.rayon} km</span>
-      <span><small>Centres fictifs</small>${liste.length} · ${libres} avec places</span>`;
+      <span><small>Centres${e.categorie ? ` · ${CATEGORIES[e.categorie].toLowerCase()}` : ""}</small>${liste.length} · ${libres} avec places</span>`;
   }
 
   function majCarteHebergements() {
     if (!carte) return;
     carte.choisir(e.choisi);
-    carte.hebergements(proches(), e.route);
+    carte.hebergements(proches(), e.route, e.categorie);
     carte.trajet(e.route);
   }
 
@@ -141,56 +150,31 @@ export function creerPanneau(racine, { demo = false, hebergementsUrl = "/carte/d
     const liste = proches();
     majCarteHebergements();
     afficherHud();
+    $("titre-liste").textContent = `Hébergements proches${e.categorie ? ` · ${CATEGORIES[e.categorie]}` : ""}`;
     const el = $("liste");
     el.classList.remove("pc-fondu"); void el.offsetWidth; el.classList.add("pc-fondu");
     if (!e.position) { el.innerHTML = `<div class="pc-discret">Les hébergements proches apparaîtront dès que le lieu sera connu.</div>`; return; }
     el.innerHTML = liste.length ? liste.map(h => {
       const route = h.id === e.choisi ? e.route : null;
       return `
-      <button type="button" class="pc-heb ${h.availablePlaces > 0 ? "libre" : "complet"}${h.id === e.choisi ? " choisi" : ""}" data-heb="${esc(h.id)}">
+      <button type="button" class="pc-heb ${h.disponibles > 0 ? "libre" : "complet"}${h.id === e.choisi ? " choisi" : ""}" data-heb="${esc(h.id)}">
         <span class="pc-heb-haut"><b>${esc(h.name)}</b><span>${formatDistance(h.distance)}</span></span>
-        <span class="pc-heb-bas">${esc(h.type)}${h.public ? ` · ${esc(h.public)}` : ""}${h.accessible ? " · ♿ PMR" : ""}</span>
-        <span class="pc-heb-pied"><span class="pc-places">${h.availablePlaces > 0 ? `${h.availablePlaces} place${h.availablePlaces > 1 ? "s" : ""} fictive${h.availablePlaces > 1 ? "s" : ""}` : "complet (fictif)"}</span>
+        <span class="pc-heb-bas">${esc(h.type)}${h.accessible ? " · ♿ PMR" : ""}</span>
+        <span class="pc-cats">${Object.entries(h.places || {}).map(([c, p]) =>
+          `<span class="pc-cat${p.disponibles > 0 ? " libre" : ""}${c === e.categorie ? " vise" : ""}">${CATEGORIES[c]} <b>${p.disponibles}</b>/${p.total}</span>`).join("")}</span>
+        <span class="pc-heb-pied"><span class="pc-places">${h.disponibles > 0 ? `${h.disponibles} place${h.disponibles > 1 ? "s" : ""} disponible${h.disponibles > 1 ? "s" : ""}` : "complet"}</span>
         ${route ? `<span class="pc-route">${route.volOiseau ? "≈ " : ""}${formatDuree(route.dureeS)} à pied · ${formatDistance(route.distanceM / 1000)}${route.volOiseau ? " (vol d'oiseau)" : ""}</span>`
                 : h.id === e.choisi ? `<span class="pc-route">calcul du trajet…</span>` : ""}</span>
       </button>`;
     }).join("")
-      : `<div class="pc-discret">Aucun hébergement de démonstration à moins de ${e.rayon} km.</div>`;
-  }
-
-  function dessinerMeteo() {
-    const el = $("meteo");
-    const lieu = esc(libelleCourt());
-    if (!e.position) { el.innerHTML = `<h3>Conditions météo</h3><div class="pc-discret">En attente de la localisation.</div>`; return; }
-    if (e.meteoStatut === "chargement") {
-      el.innerHTML = `<h3>Conditions météo — ${lieu}</h3><div class="pc-squelette"><i></i><i></i><i></i><i></i></div>`; return;
-    }
-    if (e.meteoStatut === "indisponible") {
-      el.innerHTML = `<h3>Conditions météo — ${lieu}</h3><div class="pc-discret">Service météo momentanément indisponible.</div>`; return;
-    }
-    const m = e.meteo;
-    el.innerHTML = `
-      <h3>Conditions météo — ${lieu}</h3>
-      ${m.simulee ? `<div class="pc-tag alerte">Météo simulée (démo) : service indisponible</div>` : ""}
-      <div class="pc-meteo-principal pc-fondu">
-        <span class="pc-icone" aria-hidden="true">${m.icone}</span>
-        <div><div class="pc-temp">${nombre(m.temperature)} °C</div><div>Ressenti <b>${nombre(m.ressenti)} °C</b></div></div>
-      </div>
-      <dl class="pc-meteo-dl">
-        <dt>Conditions</dt><dd>${esc(m.libelle)}</dd>
-        <dt>Précipitations</dt><dd>${m.precipitation ?? "—"} mm</dd>
-        <dt>Vent</dt><dd>${nombre(m.vent)} km/h</dd>
-        <dt>Humidité</dt><dd>${nombre(m.humidite)} %</dd>
-      </dl>
-      <div class="pc-heures">${m.prevision.map(p => `<span><small>${esc(p.heure)}</small><b>${nombre(p.temperature)}°</b><small>💧${nombre(p.pluie)}%</small></span>`).join("")}</div>
-      <div class="pc-source">${m.simulee ? "Valeurs fictives" : `Open-Meteo · relevé ${esc((m.heure || "").slice(11, 16))}`}</div>`;
+      : `<div class="pc-discret">Aucun hébergement${e.categorie ? ` pour « ${CATEGORIES[e.categorie]} »` : ""} à moins de ${e.rayon} km.</div>`;
   }
 
   function toutDessiner() {
-    afficherLieu(); dessinerHebergements(); dessinerMeteo();
+    afficherLieu(); dessinerHebergements();
   }
 
-  // ---------- enchaînement : lieu → coordonnées → carte, météo, hébergements ----------
+  // ---------- enchaînement : lieu → coordonnées → carte, hébergements ----------
   async function resoudre() {
     const moi = ++jeton;
     controleur?.abort();
@@ -202,36 +186,21 @@ export function creerPanneau(racine, { demo = false, hebergementsUrl = "/carte/d
       if (moi !== jeton) return;   // une localisation plus récente est arrivée entre-temps
       if (!pos && e.secours) pos = secours();
       if (!pos) { e.statut = "introuvable"; afficherLieu(); return; }
-      appliquer(pos, moi);
+      appliquer(pos);
     } catch {
       if (moi !== jeton) return;
-      if (e.secours) return appliquer(secours(), moi);
+      if (e.secours) return appliquer(secours());
       e.statut = "erreur"; afficherLieu();
       minuteur = setTimeout(() => moi === jeton && resoudre(), REESSAI_MS);   // panne réseau : on réessaie seul
     }
   }
 
-  function appliquer(pos, moi) {
+  function appliquer(pos) {
     oublierChoix();
     e.position = pos; e.statut = "ok";
-    e.meteoStatut = "chargement";
     toutDessiner();
     carte?.placer(pos, e.rayon, libelleCourt());
     majCarteHebergements();
-    chargerMeteo(pos, moi);
-  }
-
-  async function chargerMeteo(pos, moi) {
-    try {
-      const m = await meteo(pos.lat, pos.lon, controleur?.signal);
-      if (moi !== jeton) return;
-      e.meteo = m; e.meteoStatut = "ok";
-    } catch {
-      if (moi !== jeton) return;
-      if (demo) { e.meteo = meteoSimulee(); e.meteoStatut = "ok"; }
-      else e.meteoStatut = "indisponible";
-    }
-    dessinerMeteo();
   }
 
   // l'écoutant clique un centre (liste ou carte) : trajet à pied IGN, ligne droite si le service ne répond pas
@@ -266,7 +235,8 @@ export function creerPanneau(racine, { demo = false, hebergementsUrl = "/carte/d
   function remettreAZero() {
     clearTimeout(minuteur); jeton++; controleur?.abort(); oublierChoix();
     Object.assign(e, { cle: null, texte: null, commune: null, secours: null, correction: null, position: null,
-                       statut: "attente", meteo: null, meteoStatut: null });
+                       statut: "attente",
+                       categorie: null, categorieFiche: null, categorieManuelle: false });
     carte?.attente();
   }
 
@@ -274,7 +244,11 @@ export function creerPanneau(racine, { demo = false, hebergementsUrl = "/carte/d
   racine.addEventListener("click", ev => {
     const b = ev.target.closest("button");
     if (!b) return;
-    if (b.dataset.rayon) {
+    if (b.dataset.cat !== undefined) {
+      e.categorie = b.dataset.cat || null; e.categorieManuelle = true;
+      if (e.choisi && !proches().some(h => h.id === e.choisi)) oublierChoix();   // centre sans cette catégorie
+      dessinerHebergements(); afficherLieu();
+    } else if (b.dataset.rayon) {
       e.rayon = +b.dataset.rayon;
       if (e.choisi && !proches().some(h => h.id === e.choisi)) oublierChoix();   // centre sorti du rayon
       carte?.rayon(e.rayon);
@@ -284,7 +258,7 @@ export function creerPanneau(racine, { demo = false, hebergementsUrl = "/carte/d
     } else if (b.dataset.alt) {
       const a = e.position.alternatives[+b.dataset.alt];
       jeton++;
-      appliquer({ ...a, qualite: "choisie", alternatives: [] }, jeton);
+      appliquer({ ...a, qualite: "choisie", alternatives: [] });
     } else if (b.dataset.r === "annuler") {
       e.correction = null; planifier();
     }
@@ -303,6 +277,17 @@ export function creerPanneau(racine, { demo = false, hebergementsUrl = "/carte/d
       const id = dossier?.id ?? null;
       if (id !== e.dossierId) { remettreAZero(); e.dossierId = id; toutDessiner(); }
       if (!dossier) return;
+      // catégorie déduite de la fiche (enfants, sexe) : suivie tant que l'écoutant n'en a pas choisi une autre
+      const cat = categorieDeFiche(dossier);
+      if (cat !== e.categorieFiche) {
+        e.categorieFiche = cat;
+        if (!e.categorieManuelle && cat !== e.categorie) {
+          e.categorie = cat;
+          if (e.choisi && !proches().some(h => h.id === e.choisi)) oublierChoix();
+          dessinerHebergements();
+        }
+        afficherLieu();
+      }
       const texte = dossier.localisation || null, commune = dossier.commune || null;
       const cle = normaliser(requeteLieu(texte, commune));
       if (cle === e.cle) return;

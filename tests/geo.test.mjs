@@ -3,7 +3,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
-import { cercle, choisir, conditions, distanceKm, formatDistance, formatDuree, hebergementsProches, ligneDroite, lireMeteo, requeteLieu } from "../static/carte/geo.mjs";
+import {
+  CATEGORIES, categorieDeFiche, cercle, choisir, distanceKm, formatDistance, formatDuree, hebergementsProches, ligneDroite,
+  places, requeteLieu,
+} from "../static/carte/geo.mjs";
 
 const HEBERGEMENTS = JSON.parse(readFileSync(new URL("../static/carte/demo_hebergements.json", import.meta.url)));
 const GARE_DE_LYON = { lat: 48.8443, lon: 2.3744 };
@@ -28,21 +31,50 @@ test("hébergements : filtrés par rayon et triés par distance", () => {
   assert.equal(deux[0].id, "shelter-002");   // Quai de la Rapée, le plus proche de la gare de Lyon
 });
 
-test("jeu de démonstration : complet et marqué fictif", () => {
+test("jeu d'hébergements : complet, marqué fictif dans les données, places par catégorie cohérentes", () => {
   assert.ok(HEBERGEMENTS.length >= 15);
   assert.equal(new Set(HEBERGEMENTS.map(h => h.id)).size, HEBERGEMENTS.length);
   for (const h of HEBERGEMENTS) {
     assert.equal(h.isDemo, true);
-    assert.ok(/Démo/.test(h.name), h.name);
-    assert.ok(h.availablePlaces >= 0 && h.availablePlaces <= h.capacity);
+    const cats = Object.keys(h.places);
+    assert.ok(cats.length > 0 && cats.every(c => c in CATEGORIES), h.id);
+    for (const p of Object.values(h.places)) assert.ok(p.disponibles >= 0 && p.disponibles <= p.total, h.id);
     assert.ok(distanceKm({ lat: 48.8566, lon: 2.3522 }, { lat: h.latitude, lon: h.longitude }) < 8);
   }
-  assert.ok(HEBERGEMENTS.some(h => h.availablePlaces === 0) && HEBERGEMENTS.some(h => h.availablePlaces > 0));
+  for (const c of Object.keys(CATEGORIES)) {
+    const avec = HEBERGEMENTS.filter(h => h.places[c]);
+    assert.ok(avec.some(h => h.places[c].disponibles > 0) && avec.some(h => h.places[c].disponibles === 0), c);
+  }
+});
+
+test("places : total ou par catégorie, filtre des centres par catégorie", () => {
+  const bastille = HEBERGEMENTS.find(h => h.id === "shelter-001");
+  assert.deepEqual(places(bastille, null), { total: 40, disponibles: 3 });
+  assert.deepEqual(places(bastille, "femmes"), { total: 10, disponibles: 2 });
+  assert.deepEqual(places(bastille, "hommes"), { total: 18, disponibles: 0 });
+  const familles = hebergementsProches(GARE_DE_LYON, HEBERGEMENTS, 10, "familles");
+  assert.ok(familles.length > 0 && familles.every(h => h.places.familles));
+  assert.ok(familles.every(h => h.disponibles === h.places.familles.disponibles && h.capacite === h.places.familles.total));
+  assert.ok(!familles.some(h => h.id === "shelter-002"));   // halte de nuit hommes seuls
+});
+
+test("catégorie déduite de la fiche : enfants, puis sexe", () => {
+  assert.equal(categorieDeFiche({ appelant: { sexe: "femme" }, cas_particuliers: { nb_enfants: 2 } }), "familles");
+  assert.equal(categorieDeFiche({ appelant: { sexe: "homme" }, criteres: { enfants_presents: true } }), "familles");
+  assert.equal(categorieDeFiche({ appelant: { sexe: "femme" }, cas_particuliers: { nb_enfants: null } }), "femmes");
+  assert.equal(categorieDeFiche({ appelant: { sexe: "homme" } }), "hommes");
+  assert.equal(categorieDeFiche({ appelant: {} }), null);
+  assert.equal(categorieDeFiche(null), null);
 });
 
 test("requête de lieu : tournures anglaises retirées, commune ajoutée une seule fois", () => {
   assert.equal(requeteLieu("near the Gare de Lyon train station", "Paris"), "Gare de Lyon, Paris");
   assert.equal(requeteLieu("Gare du Nord, Paris", "Paris"), "Gare du Nord, Paris");
+  assert.equal(requeteLieu("près de la gare de Lyon", "Paris"), "gare de Lyon, Paris");
+  assert.equal(requeteLieu("devant la gare du Nord", "Paris"), "gare du Nord, Paris");
+  assert.equal(requeteLieu("Je suis à côté de l'Hôtel de Ville", "Paris"), "Hôtel de Ville, Paris");
+  assert.equal(requeteLieu("place de la République", "Paris"), "place de la République, Paris");
+  assert.equal(requeteLieu("Le Mans, place de la République", null), "Le Mans, place de la République");
   assert.equal(requeteLieu(null, "Paris"), "Paris");
   assert.equal(requeteLieu(null, null), "");
 });
@@ -88,20 +120,7 @@ test("géocodage : numéro de rue préféré à la rue seule, rien de crédible 
   assert.equal(choisir([], "Gare de Lyon", null), null);
 });
 
-test("météo : lecture de la réponse Open-Meteo", () => {
-  const heures = Array.from({ length: 48 }, (_, i) => `2026-10-22T${String(i % 24).padStart(2, "0")}:00`);
-  const m = lireMeteo({
-    current: { time: "2026-10-22T11:45", temperature_2m: 4.2, apparent_temperature: 1.1, relative_humidity_2m: 90,
-               precipitation: 0.4, weather_code: 63, wind_speed_10m: 18 },
-    hourly: { time: heures, temperature_2m: heures.map((_, i) => i), precipitation_probability: heures.map(() => 50) },
-  });
-  assert.equal(m.temperature, 4.2);
-  assert.equal(m.ressenti, 1.1);
-  assert.equal(m.libelle, "pluie");
-  assert.equal(m.simulee, false);
-  assert.equal(m.prevision.length, 8);
-  assert.equal(m.prevision[0].heure, "12:00");
-  assert.equal(conditions(999).libelle, "inconnu");
+test("distances affichées : mètres sous 1 km, sinon kilomètres", () => {
   assert.equal(formatDistance(0.734), "730 m");
   assert.equal(formatDistance(2.46), "2,5 km");
 });

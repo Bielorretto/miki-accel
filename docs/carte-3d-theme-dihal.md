@@ -1,5 +1,7 @@
 # Étape : carte 3D « tech » et thème DIHAL pour le tableau de bord des écoutants
 
+> **Mise à jour** : la météo a ensuite été retirée du panneau (voir [navigation-langue-scenarios.md](navigation-langue-scenarios.md)).
+
 Suite de [carte-meteo-hebergements.md](carte-meteo-hebergements.md). Cette étape donne au tableau de bord des
 écoutants (`dashboard.py`) le design de la page DIHAL (liste des départements autour de l'œil MIKI), et remplace
 la carte Leaflet 2D par une **carte 3D MapLibre** inspirée des images du dossier `references/`. Le but est un effet

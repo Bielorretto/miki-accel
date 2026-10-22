@@ -198,6 +198,7 @@ class Thinker:
             "debut": self.debut,
             "maj": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "priorite": self.last.get("priorite"),
+            "langue": self.suivi.langue,   # langue de l'appelant, suivie pendant l'appel (affichée sur la fiche)
             **fiche,
             "transcription": self.transcript(),
         }
