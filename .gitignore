@@ -1,5 +1,29 @@
+# Secrets : clés API (LiveKit, Mistral, ElevenLabs…)
 .env
-venv
+.env.*
+!.env.example
+
+# Environnements Python
+venv/
+.venv/
 __pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Données des appels : fiches en cours et dossiers créés (données personnelles, jamais dans git)
 sessions/
 dossiers/
+
+# Node (tests de static/carte)
+node_modules/
+
+# Journaux
+*.log
+
+# Éditeurs et système
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
