@@ -20,9 +20,12 @@ services:
       dockerfile: Dockerfile.agent
     environment:
       DB_POOL_MAX: "3"
-      TALKER_MODEL: "claude:claude-haiku-5-5,openai/gpt-oss-120b"
+      # Sonnet 5.5 : seul modèle du banc d'essai à tenir la conversation sans redemander ; Haiku en secours
+      TALKER_MODEL: "claude:claude-sonnet-5-5,claude:claude-haiku-5-5"
       THINKER_MODELS: "claude:claude-haiku-5-5,groq:openai/gpt-oss-120b"
-      STT_PROVIDER: "elevenlabs"
+      # Deepgram : ElevenLabs ne validait pas les phrases au téléphone (et transcrivait parfois en russe)
+      STT_PROVIDER: "deepgram"
+      STT_MODEL: "nova-3"
       STT_LANGUAGE: "fr"
       TTS_PROVIDER: "elevenlabs"
       TTS_LANGUAGE: "fr"
@@ -35,3 +38,5 @@ services:
       # dans le cloud, le réseau est bon : le détecteur de fin de tour de LiveKit Cloud est le meilleur
       TURN_DETECTOR: "v1"
       NOISE_CANCELLATION: "bvc"
+      # accusés de réception immédiats (« D'accord. ») coupés : ils sonnaient faux sur une question
+      MIKI_ACCUSE: "0"

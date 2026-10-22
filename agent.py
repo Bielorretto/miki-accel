@@ -30,6 +30,7 @@ from openai import AsyncOpenAI
 from livekit.agents import room_io
 from livekit.agents.types import NOT_GIVEN
 from livekit.agents.utils import is_given
+from livekit.agents.voice.generation import INSTRUCTIONS_MESSAGE_ID
 from livekit.agents import (
     Agent,
     AgentServer,
@@ -42,6 +43,7 @@ from livekit.agents import (
     cli,
     inference,
     llm,
+    stt,
 )
 from livekit.plugins import deepgram, elevenlabs, groq, silero
 from livekit.plugins import anthropic as lk_anthropic
@@ -90,6 +92,48 @@ def amplifier(frame: rtc.AudioFrame) -> rtc.AudioFrame:
                           frame.samples_per_channel)
 
 
+# mot transcrit avec une confiance Deepgram sous ce seuil : marqué comme douteux pour MIKI
+CONFIANCE_MIN = float(os.environ.get("STT_CONFIANCE_MIN", "0.6"))
+DOUTE = " (?)"
+
+# vocabulaire que Deepgram doit reconnaître en priorité (keyterm prompting de nova-3)
+TERMES_115 = [
+    "cent quinze", "SAMU social", "hébergement", "mise à l'abri", "foyer", "CHRS", "hôtel social",
+    "maraude", "accueil de jour", "Emmaüs", "Croix-Rouge", "Restos du Cœur", "squat", "expulsé",
+    "expulsion", "demandeur d'asile", "titre de séjour", "OFII", "CADA", "violences conjugales",
+    "enceinte", "Paris", "Marseille", "Lyon", "Toulouse", "Nice", "Nantes", "Montpellier",
+    "Strasbourg", "Bordeaux", "Lille", "Rennes", "Grenoble", "Saint-Denis", "gare", "Part-Dieu",
+]
+
+
+# Accusé de réception dit dès la fin de la phrase de l'appelant, pendant que le modèle prépare sa réponse :
+# la personne entend MIKI en quelques centaines de millisecondes au lieu de 1,5 à 2 s. Enregistrés au
+# début de l'appel avec la voix de MIKI, joués à tour de rôle. MIKI_ACCUSE=0 pour couper.
+# sans « mmh » ni points de suspension : la voix les rendait en « mmmh », « euuuh » traînants
+# (pas de « très bien » : déplacé après « il m'a frappée »)
+ACCUSES = ["D'accord.", "Je vois.", "Entendu."]
+NOTE_ACCUSE = ("(Consigne interne, ne pas la lire à voix haute) Une courte interjection (« d'accord », « je vois », "
+               "« entendu ») vient d'être dite à l'appelant juste avant ta réponse : n'en commence pas par une "
+               "interjection, enchaîne directement.")
+
+
+def notes_en_fin(chat_ctx: ChatContext) -> ChatContext:
+    """Garde le prompt système fixe et passe les notes de la base (qui changent pendant l'appel) en fin.
+
+    Claude ne relit son cache que si le début de la requête est identique d'un tour à l'autre : avec les
+    notes collées au prompt système, le cache était réécrit à chaque tour sans jamais être relu.
+    """
+    i = chat_ctx.index_by_id(INSTRUCTIONS_MESSAGE_ID)
+    texte = chat_ctx.items[i].text_content if i is not None else None
+    if not texte or not texte.startswith(TALKER_PROMPT) or texte == TALKER_PROMPT:
+        return chat_ctx
+    dynamique = texte[len(TALKER_PROMPT):]
+    chat_ctx = chat_ctx.copy()
+    chat_ctx.items[i] = ChatMessage(id=INSTRUCTIONS_MESSAGE_ID, role="system", content=[TALKER_PROMPT])
+    chat_ctx.items.append(ChatMessage(role="user", content=[f"(Consigne interne, ne pas la lire à voix haute){dynamique}"]))
+    return chat_ctx
+
+
 class Assistant115(Agent):
     """Agent d'accueil : aucun outil, il ne fait que poser des questions."""
 
@@ -98,8 +142,14 @@ class Assistant115(Agent):
         # MIKI_ENREGISTRER_VOIX=1 : garde la voix générée pour la comparer à ce qu'entend l'appelant
         self.voix: list[bytes] | None = [] if os.environ.get("MIKI_ENREGISTRER_VOIX") == "1" else None
         self.voix_format = (16000, 1)
+        self.accuses: dict[str, list[rtc.AudioFrame]] = {}   # préenregistrés au début de l'appel
+        self.accuse_suivant = 0
+        self.en_francais = True
 
     async def llm_node(self, chat_ctx: ChatContext, tools, model_settings):
+        # réponse à l'appelant (et non consigne système) : l'accusé de réception est déjà parti
+        accuse = self.accuse_actif() and isinstance(chat_ctx.items[-1] if chat_ctx.items else None, ChatMessage) \
+            and chat_ctx.items[-1].role == "user"
         # Mistral Large 4 se met à raisonner (réponse illisible en streaming) quand le dernier
         # message est une consigne système : on la lui passe en message utilisateur.
         last = chat_ctx.items[-1] if chat_ctx.items else None
@@ -109,8 +159,44 @@ class Assistant115(Agent):
                 role="user",
                 content=[f"(Consigne interne, ne pas la lire à voix haute) {last.text_content}"],
             )
+        chat_ctx = notes_en_fin(chat_ctx)
+        if accuse:
+            chat_ctx = chat_ctx.copy()
+            chat_ctx.items.append(ChatMessage(role="user", content=[NOTE_ACCUSE]))
         async for chunk in Agent.default.llm_node(self, chat_ctx, tools, model_settings):
             yield chunk
+
+    def accuse_actif(self) -> bool:
+        # en français seulement : les accusés sont enregistrés dans cette langue
+        return len(self.accuses) == len(ACCUSES) and self.en_francais
+
+    async def preparer_accuses(self, tts) -> None:
+        for texte in ACCUSES:
+            self.accuses[texte] = [amplifier(ev.frame) async for ev in tts.synthesize(texte)]
+
+    async def on_user_turn_completed(self, turn_ctx: ChatContext, new_message: ChatMessage) -> None:
+        # appelé à la fin du tour, juste avant que la réponse (déjà en préparation) ne soit planifiée :
+        # l'accusé passe donc avant elle
+        if not self.accuse_actif():
+            return
+        texte = ACCUSES[self.accuse_suivant % len(ACCUSES)]
+        self.accuse_suivant += 1
+
+        async def audio():
+            for frame in self.accuses[texte]:
+                yield frame
+        self.session.say(texte, audio=audio(), allow_interruptions=False, add_to_chat_ctx=False)
+
+    async def stt_node(self, audio, model_settings):
+        # Deepgram donne une confiance par mot : les mots douteux sont suivis de « (?) ». MIKI ne fait
+        # confirmer que ceux-là, au lieu de faire répéter chaque réponse courte
+        async for ev in Agent.default.stt_node(self, audio, model_settings):
+            if isinstance(ev, stt.SpeechEvent) and ev.type == stt.SpeechEventType.FINAL_TRANSCRIPT:
+                for alt in ev.alternatives:
+                    if alt.words and all(is_given(w.confidence) for w in alt.words):
+                        alt.text = " ".join(str(w) + (DOUTE if w.confidence < CONFIANCE_MIN else "")
+                                            for w in alt.words)
+            yield ev
 
     async def tts_node(self, text, model_settings):
         async for frame in Agent.default.tts_node(self, numeros_en_lettres(text), model_settings):
@@ -300,15 +386,14 @@ class Thinker:
 
 
     async def mettre_a_jour_consignes(self) -> None:
-        """Instructions du parleur : son prompt, la fiche, la consigne du penseur et les notes de la base."""
+        """Instructions du parleur : son prompt et les notes de la base.
+
+        Ni la fiche ni la consigne du penseur : il met 3 à 13 s par analyse, MIKI répond en 1 à 2 s, et
+        ses informations toujours en retard faisaient redemander ce qui venait d'être dit. MIKI mène
+        seul la conversation (un modèle assez intelligent pour suivre ce qui a été dit) ; le penseur
+        remplit la fiche du dossier et donne l'alerte en cas de danger.
+        """
         texte = TALKER_PROMPT
-        if self.last:
-            fiche = {k: v for k, v in self.last.items() if k not in ("consigne", "infos_manquantes")}
-            texte += (
-                f"\n\nFICHE ACTUELLE (ne redemande pas ce qui est connu) : {json.dumps(fiche, ensure_ascii=False)}"
-                f"\nINFORMATIONS MANQUANTES : {', '.join(self.last.get('infos_manquantes') or []) or 'aucune'}"
-                f"\n\nCONSIGNE DU SUPERVISEUR, À SUIVRE EN PRIORITÉ dans ta prochaine réponse "
-                f"(sauf si la personne vient de dire quelque chose d'urgent) : {self.last.get('consigne') or 'aucune'}")
         if notes := self.suivi.notes_pour_miki():
             texte += f"\n\nNOTES DE LA BASE DU CENT QUINZE (à suivre, chacune une seule fois) :\n{notes}"
         await self.agent.update_instructions(texte)
@@ -382,7 +467,8 @@ def build_stt():
             # entendue est signalée : MIKI suit l'appelant et on cherche un écoutant qui la parle
             secondary_languages=LANGUES_SECONDAIRES, include_language_detection=True,
         )
-    return deepgram.STT(model=os.environ.get("STT_MODEL", "nova-3"), language=langue, sample_rate=frequence)
+    return deepgram.STT(model=os.environ.get("STT_MODEL", "nova-3"), language=langue, sample_rate=frequence,
+                        keyterm=TERMES_115)
 
 
 def build_tts():
@@ -408,7 +494,9 @@ class ClaudeVoix(lk_anthropic.LLM):
     """
 
     def chat(self, *, extra_kwargs=NOT_GIVEN, **kwargs):
-        extra = {"thinking": {"type": "disabled"}, "output_config": {"effort": "low"}}
+        # Sonnet 5.5 refuse « disabled » : « between_tools » coupe la réflexion (hors outils, qu'il n'a pas)
+        coupee = "between_tools" if "sonnet-5-5" in self.model else "disabled"
+        extra = {"thinking": {"type": coupee}, "output_config": {"effort": "low"}}
         if is_given(extra_kwargs):
             extra.update(extra_kwargs)
         return super().chat(extra_kwargs=extra, **kwargs)
@@ -452,7 +540,10 @@ def build_llm():
         elif "qwen" in model:
             kw["reasoning_effort"] = "none"
         llms.append(groq.LLM(model=model, temperature=0.4, **kw))
-    return llms[0] if len(llms) == 1 else llm.FallbackAdapter(llms)
+    # Claude répond d'habitude en moins d'une seconde : au-delà de 2 s sans réponse, le modèle suivant
+    # prend le relais (le délai par défaut de 5 s laissait l'appelant dans le silence)
+    attente = float(os.environ.get("LLM_ATTENTE_MAX_S", "2.0"))
+    return llms[0] if len(llms) == 1 else llm.FallbackAdapter(llms, attempt_timeout=attente)
 
 
 def reduction_bruit(params):
@@ -474,6 +565,9 @@ def prewarm(proc: JobProcess) -> None:
     proc.userdata["vad"] = silero.VAD.load(
         activation_threshold=float(os.environ.get("VAD_SEUIL", "0.6")),
         min_speech_duration=float(os.environ.get("VAD_PAROLE_MIN_S", "0.15")),
+        # silence avant de considérer que la personne a fini (0,55 s par défaut) : c'était 0,58 s perdues
+        # à chaque tour ; le détecteur de fin de tour garde la main si la phrase semble inachevée
+        min_silence_duration=float(os.environ.get("VAD_SILENCE_MIN_S", "0.4")),
     )
 
 
@@ -481,7 +575,8 @@ def prewarm(proc: JobProcess) -> None:
 server = AgentServer(setup_fnc=prewarm, shutdown_process_timeout=30)
 
 
-@server.rtc_session()
+# MIKI_AGENT_NAME=miki-test : ne reçoit que les appels qu'on lui envoie (robot de test), jamais les vrais
+@server.rtc_session(agent_name=os.environ.get("MIKI_AGENT_NAME", ""))
 async def entrypoint(ctx: JobContext) -> None:
     if not (os.environ.get("LIVEKIT_API_KEY") and os.environ.get("LIVEKIT_API_SECRET")):
         raise RuntimeError("LIVEKIT_API_KEY / LIVEKIT_API_SECRET manquants dans .env : "
@@ -516,7 +611,7 @@ async def entrypoint(ctx: JobContext) -> None:
 
     async def _transcrire(role: str, texte: str) -> None:
         await suivi_pret   # l'accueil est dit avant l'ouverture en base : il attend, l'ordre est conservé
-        await suivi.message(role, texte)
+        await suivi.message(role, texte.replace(DOUTE, ""))   # le dossier garde le texte sans marques
 
     async def _ouvrir_suivi() -> None:
         try:
@@ -533,6 +628,7 @@ async def entrypoint(ctx: JobContext) -> None:
         await suivi.changer_langue(langue)
         if langue in LANGUES_PARLEES:   # sinon la voix reste en français (note dans suivi)
             session.tts.update_options(language=langue)
+        agent.en_francais = langue == "fr"
         await thinker.mettre_a_jour_consignes()
 
     detection = {"langue": None, "fois": 0}
@@ -606,6 +702,8 @@ async def entrypoint(ctx: JobContext) -> None:
         room_options=room_io.RoomOptions(audio_input=room_io.AudioInputOptions(noise_cancellation=reduction_bruit)),
     )
     asyncio.create_task(_ouvrir_suivi())
+    if os.environ.get("MIKI_ACCUSE", "1") != "0":
+        asyncio.create_task(agent.preparer_accuses(session.tts))   # pendant l'accueil
     # l'accueil passe aussi par le parleur Mistral : tout ce que dit Miki vient de lui
     session.generate_reply(
         instructions=f"Début de l'appel : accueille la personne avec ce message exact, mot pour mot : "

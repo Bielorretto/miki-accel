@@ -144,7 +144,7 @@ web, port 8080) et `Dockerfile.agent` (MIKI, sans port : il se connecte lui-mêm
 3. Ajouter les **secrets** :
    - `web` : `MIKI_HMAC_SECRET`
    - `agent` : `MIKI_HMAC_SECRET`, `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`,
-     `ANTHROPIC_API_KEY`, `ELEVEN_API_KEY`, `GROQ_API_KEY`
+     `ANTHROPIC_API_KEY`, `ELEVEN_API_KEY`, `DEEPGRAM_API_KEY`, `GROQ_API_KEY`
    Le même `MIKI_HMAC_SECRET` partout, celui de la base actuelle : sinon les appelants déjà
    connus ne sont plus reconnus.
 4. **Deploy**. L'adresse publique du tableau de bord apparaît dans **Connection information** de
