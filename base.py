@@ -34,7 +34,11 @@ async def connecter() -> tuple[asyncpg.Pool, valkey.Valkey]:
     pool = await asyncpg.create_pool(os.environ["DATABASE_URL"], min_size=1,
                                      max_size=int(os.environ.get("DB_POOL_MAX", "3")),
                                      init=_codecs)
-    vk = valkey.from_url(os.environ["VALKEY_URL"], decode_responses=True)
+    # pas de délai de lecture : le relais pub/sub du serveur attend des messages pendant des minutes,
+    # et un délai le faisait couper toutes les 5 s sur Aiven ; un ping toutes les 30 s garde la
+    # connexion vivante et détecte une coupure réelle
+    vk = valkey.from_url(os.environ["VALKEY_URL"], decode_responses=True, socket_timeout=None,
+                         socket_connect_timeout=10, socket_keepalive=True, health_check_interval=30)
     return pool, vk
 
 

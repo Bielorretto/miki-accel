@@ -150,7 +150,10 @@ class SuiviAppel:
             self.notes.pop("langue", None)
             return
         if self.langue in LANGUES_PARLEES:
-            note = f"LANGUE : l'appelant parle {nom}. Parle-lui en {nom} jusqu'à la fin de l'appel."
+            note = (f"LANGUE : la transcription indique que l'appelant parle {nom}. Si tu ne lui as pas encore "
+                    f"demandé, pose-lui simplement la question, en français puis en {nom}, sans annoncer de "
+                    f"changement : dans quelle langue préfère-t-il continuer ? Ensuite, parle-lui dans la langue qu'il choisit. Si ses réponses sont en "
+                    f"français, reste en français.")
         else:
             note = (f"LANGUE : l'appelant parle {nom}, que ta voix ne sait pas parler. Continue en français avec "
                     f"des phrases très courtes et simples, ou en anglais si la personne le comprend mieux.")

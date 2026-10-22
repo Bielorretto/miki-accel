@@ -15,3 +15,4 @@ valkey==6.2.0
 fastapi==0.159.1
 uvicorn[standard]==0.54.0
 livekit-plugins-anthropic==1.8.3
+livekit-plugins-noise-cancellation==0.3.2

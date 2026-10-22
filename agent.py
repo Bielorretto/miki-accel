@@ -27,6 +27,7 @@ from google import genai
 from google.genai import types as genai_types
 from livekit import rtc
 from openai import AsyncOpenAI
+from livekit.agents import room_io
 from livekit.agents.types import NOT_GIVEN
 from livekit.agents.utils import is_given
 from livekit.agents import (
@@ -44,6 +45,7 @@ from livekit.agents import (
 )
 from livekit.plugins import deepgram, elevenlabs, groq, silero
 from livekit.plugins import anthropic as lk_anthropic
+from livekit.plugins import noise_cancellation
 from livekit.plugins import openai as lk_openai
 
 from priorite import compute_priority
@@ -350,6 +352,15 @@ LANGUES_SECONDAIRES = os.environ.get("STT_LANGUES_SECONDAIRES",
                                      "eng,ara,spa,por,ron,rus,ukr,tur,pus,fas,tir,wol").split(",")
 
 
+HESITATIONS = re.compile(r"^(e+u+h*|h?e+m+|h?u+m+|a+h+|o+h+|b+e+n+|b+a+h+|э+|а+|у+|м+|ээ+)$", re.IGNORECASE)
+
+
+def vrais_mots(texte: str) -> int:
+    """Nombre de mots d'au moins deux lettres, sans les hésitations (« euh », « э-э-э »…)."""
+    mots = [m for m in re.findall(r"\w+", texte) if len(m) >= 2]
+    return sum(1 for m in mots if not HESITATIONS.match(m))
+
+
 def build_stt():
     """Transcription de l'appelant : ElevenLabs Scribe (temps réel) ou Deepgram, selon STT_PROVIDER."""
     langue = os.environ.get("STT_LANGUAGE", "en")
@@ -362,7 +373,8 @@ def build_stt():
         silence = float(os.environ.get("STT_SILENCE_S", "0.5"))
         return elevenlabs.STT(
             model="scribe_v2_realtime", language_code=langue, sample_rate=frequence,
-            server_vad={"vad_silence_threshold_secs": silence, "min_silence_duration_ms": int(silence * 1000)},
+            server_vad={"vad_silence_threshold_secs": silence, "min_silence_duration_ms": int(silence * 1000),
+                        "vad_threshold": float(os.environ.get("STT_VAD_SEUIL", "0.55"))},
             # le français reste la langue attendue, mais ces langues sont reconnues et la langue
             # entendue est signalée : MIKI suit l'appelant et on cherche un écoutant qui la parle
             secondary_languages=LANGUES_SECONDAIRES, include_language_detection=True,
@@ -440,8 +452,26 @@ def build_llm():
     return llms[0] if len(llms) == 1 else llm.FallbackAdapter(llms)
 
 
+def reduction_bruit(params):
+    """Supprime le bruit ET les voix de fond de l'appelant avant la transcription (LiveKit BVC).
+
+    Sans ça, dans la rue ou un hall de gare, les conversations autour sont prises pour la voix de
+    l'appelant : MIKI attend qu'il « finisse » (longs silences) et répond à des phrases qui ne lui
+    sont pas adressées. Modèle téléphonique pour les appels SIP. NOISE_CANCELLATION=off pour couper.
+    """
+    if os.environ.get("NOISE_CANCELLATION", "bvc") == "off":
+        return None
+    if params.participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP:
+        return noise_cancellation.BVCTelephony()
+    return noise_cancellation.BVC()
+
+
 def prewarm(proc: JobProcess) -> None:
-    proc.userdata["vad"] = silero.VAD.load()
+    # moins sensible que par défaut (0,5 et 50 ms) : un bruit bref ne passe plus pour de la parole
+    proc.userdata["vad"] = silero.VAD.load(
+        activation_threshold=float(os.environ.get("VAD_SEUIL", "0.6")),
+        min_speech_duration=float(os.environ.get("VAD_PAROLE_MIN_S", "0.15")),
+    )
 
 
 # laisse le temps à l'analyse finale du penseur avant de couper le process
@@ -502,11 +532,33 @@ async def entrypoint(ctx: JobContext) -> None:
             session.tts.update_options(language=langue)
         await thinker.mettre_a_jour_consignes()
 
+    detection = {"langue": None, "fois": 0}
+
     @session.on("user_input_transcribed")
     def _on_transcription(ev) -> None:
-        # une phrase d'au moins trois mots dans une autre langue : un « ok » isolé ne fait pas changer
+        """Le français reste la langue de l'appel tant que l'appelant n'a pas clairement parlé une autre langue.
+
+        La détection se trompe sur les hésitations et les phrases courtes (un « euh… ouais » a déjà été
+        pris pour du russe) : il faut deux phrases d'affilée dans la même langue étrangère, d'au moins
+        quatre vrais mots. Une seule phrase en français suffit pour y revenir.
+        """
         langue = getattr(ev.language, "language", None) if ev.language else None
-        if ev.is_final and langue and langue != suivi.langue and len(ev.transcript.split()) >= 3:
+        if not ev.is_final or not langue:
+            return
+        mots = vrais_mots(ev.transcript)
+        if langue == suivi.langue:
+            detection.update(langue=None, fois=0)
+            return
+        if langue == "fr":
+            if mots >= 3:
+                asyncio.create_task(_changer_langue("fr"))
+            return
+        if mots < 4:
+            return
+        detection["fois"] = detection["fois"] + 1 if detection["langue"] == langue else 1
+        detection["langue"] = langue
+        if detection["fois"] >= 2:
+            detection.update(langue=None, fois=0)
             asyncio.create_task(_changer_langue(langue))
     latency = LatencyLog()
 
@@ -546,7 +598,10 @@ async def entrypoint(ctx: JobContext) -> None:
 
     ctx.add_shutdown_callback(_save)
 
-    await session.start(agent=agent, room=ctx.room, record=False)
+    await session.start(
+        agent=agent, room=ctx.room, record=False,
+        room_options=room_io.RoomOptions(audio_input=room_io.AudioInputOptions(noise_cancellation=reduction_bruit)),
+    )
     asyncio.create_task(_ouvrir_suivi())
     # l'accueil passe aussi par le parleur Mistral : tout ce que dit Miki vient de lui
     session.generate_reply(
