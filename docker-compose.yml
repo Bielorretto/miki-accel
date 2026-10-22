@@ -1,0 +1,21 @@
+# Base locale de développement : mêmes versions majeures que les services Aiven.
+# Lancer :  docker compose up -d
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: miki
+      POSTGRES_DB: miki
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5442:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  valkey:
+    image: valkey/valkey:8
+    ports:
+      - "6389:6379"
+
+volumes:
+  pgdata:

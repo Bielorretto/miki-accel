@@ -1,0 +1,16 @@
+livekit-agents==1.8.3
+livekit-plugins-deepgram==1.8.3
+livekit-plugins-elevenlabs==1.8.3
+livekit-plugins-groq==1.8.3
+livekit-plugins-silero==1.8.3
+livekit-plugins-turn-detector==1.8.3
+openai==2.54.0
+google-genai==2.25.0
+python-dotenv==1.2.3
+requests==2.34.2
+livekit-plugins-openai==1.8.3
+anthropic==1.14.0
+asyncpg==0.32.0
+valkey==6.2.0
+fastapi==0.159.1
+uvicorn[standard]==0.54.0

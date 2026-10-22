@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>MIKI · Tableau de bord DIHAL</title>
+<style>
+  :root {
+    --bg: #061113;
+    --surface: #0b1d1f;
+    --card: rgba(255, 255, 255, 0.035);
+    --card-border: rgba(140, 210, 200, 0.16);
+    --text: #e6efee;
+    --muted: #8aa5a2;
+    --faint: #5c7774;
+    --teal: #5fd4c4;
+    --teal-clair: #c9f3ec;
+    --or: #f5c35b;
+    --mark: #1fa594;        /* marques des graphiques (validé sur fond sombre) */
+    --mark-hover: #c2862a;
+    --line: rgba(140, 210, 200, 0.22);
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; }
+  body {
+    background: radial-gradient(ellipse at 50% 45%, #0e2a2c 0%, var(--bg) 60%);
+    color: var(--text);
+    font-family: -apple-system, "Inter", "Segoe UI", sans-serif;
+    overflow: hidden;
+  }
+  header {
+    position: absolute; top: 0; left: 0; right: 0; z-index: 3;
+    padding: 18px 32px; display: flex; justify-content: space-between; align-items: center; gap: 24px;
+    font-size: 14px; color: var(--muted);
+  }
+  header b { color: var(--text); font-weight: 600; letter-spacing: .02em; }
+  .kpis-globaux { display: flex; gap: 22px; font-size: 13px; }
+  .kpis-globaux span b { color: var(--text); font-size: 15px; font-variant-numeric: tabular-nums; }
+  .filtres { display: flex; gap: 4px; padding: 3px; border: 1px solid var(--card-border); border-radius: 999px; }
+  .filtres button {
+    background: none; border: 0; color: var(--muted); font: inherit; font-size: 12px;
+    padding: 5px 12px; border-radius: 999px; cursor: pointer;
+  }
+  .filtres button.actif { background: rgba(95, 212, 196, .14); color: var(--text); }
+  .direct { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+  .direct i { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+  .direct.on i { background: var(--teal); box-shadow: 0 0 8px var(--teal); }
+
+  .stage {
+    position: relative; height: 100%;
+    display: grid; grid-template-columns: 1fr 330px 1fr;
+    align-items: center; padding: 70px 32px 24px; min-height: 760px;
+  }
+  svg.liens { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  svg.liens path { fill: none; stroke: rgba(140, 210, 200, .07); stroke-width: 1; transition: stroke .2s, stroke-width .2s; }
+  svg.liens path.actif { stroke: var(--or); stroke-width: 2; filter: drop-shadow(0 0 6px var(--or)); }
+
+  .colonne { display: grid; grid-template-columns: repeat(4, 76px); grid-auto-rows: 46px; gap: 6px;
+             position: relative; z-index: 1; }
+  .colonne.gauche { justify-self: end; }
+  .colonne.droite { justify-self: start; }
+
+  .dept {
+    position: relative; padding: 6px 8px; border-radius: 8px; text-align: left; color: inherit; font: inherit;
+    background: rgba(31, 165, 148, var(--intensite, .04)); border: 1px solid var(--card-border);
+    cursor: pointer; transition: border-color .15s, transform .15s, box-shadow .15s, opacity .15s;
+  }
+  .dept:hover, .dept:focus-visible, .dept.selection {
+    outline: none; border-color: rgba(245, 195, 91, .8); transform: scale(1.08); z-index: 2;
+    box-shadow: 0 0 18px rgba(245, 195, 91, .2);
+  }
+  .dept.hors-zone { border-style: dashed; background: transparent; }
+  .dept.estompe { opacity: .15; }
+  .dept .num { display: block; font-size: 15px; font-weight: 600; line-height: 1.1; }
+  .dept .n { display: block; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .dept.hors-zone .n { color: var(--faint); }
+  .legende { position: absolute; left: 32px; bottom: 18px; z-index: 2; font-size: 11px; color: var(--muted);
+             display: flex; align-items: center; gap: 8px; }
+  .legende .rampe { width: 120px; height: 8px; border-radius: 4px;
+                    background: linear-gradient(90deg, rgba(31,165,148,.04), rgba(31,165,148,.85)); border: 1px solid var(--card-border); }
+  .recherche { background: rgba(255,255,255,.04); border: 1px solid var(--card-border); border-radius: 999px;
+               color: var(--text); font: inherit; font-size: 12px; padding: 5px 12px; width: 190px; }
+  .recherche::placeholder { color: var(--faint); }
+
+  .centre { position: relative; display: grid; place-items: center; z-index: 1; }
+  .halo {
+    position: absolute; width: 380px; height: 380px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(95,212,196,.10) 0%, rgba(95,212,196,.03) 55%, transparent 70%);
+    border: 1px solid rgba(140, 210, 200, .07);
+  }
+  .halo::after { content: ""; position: absolute; inset: 50px; border-radius: 50%; border: 1px dashed rgba(140, 210, 200, .10); }
+  #logo { width: 250px; overflow: visible;
+          filter: drop-shadow(0 0 10px rgba(95,212,196,.55)) drop-shadow(0 0 28px rgba(95,212,196,.25)); }
+  #logo .trait { fill: none; stroke: url(#degrade); stroke-width: 8; stroke-linecap: round; }
+  #logo .onde { animation: onde 2.4s ease-in-out infinite; }
+  #logo .onde.o2 { animation-delay: .25s; }
+  @keyframes onde { 0%, 100% { opacity: .35; } 40% { opacity: 1; } }
+  #logo #pupille { fill: url(#iris); filter: drop-shadow(0 0 8px rgba(245,195,91,.9)); }
+  .marque { margin-top: 6px; font-size: 34px; font-weight: 600; letter-spacing: .12em;
+            background: linear-gradient(90deg, var(--teal-clair), var(--teal));
+            -webkit-background-clip: text; background-clip: text; color: transparent;
+            filter: drop-shadow(0 0 12px rgba(95,212,196,.45)); }
+  .sous { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+  /* ---------- Panneau de statistiques ---------- */
+  .panneau {
+    position: absolute; top: 0; right: 0; bottom: 0; width: min(520px, 100%); z-index: 4;
+    background: rgba(8, 22, 24, .94); border-left: 1px solid var(--card-border);
+    backdrop-filter: blur(12px); transform: translateX(105%); transition: transform .3s ease;
+    overflow-y: auto; padding: 26px 28px 40px;
+  }
+  .panneau.ouvert { transform: none; }
+  .panneau .fermer { position: absolute; top: 18px; right: 20px; background: none; border: 1px solid var(--card-border);
+                     color: var(--muted); border-radius: 8px; padding: 4px 10px; cursor: pointer; font: inherit; }
+  .panneau h2 { font-size: 22px; font-weight: 600; }
+  .panneau .siao { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  .phrases { margin: 18px 0 6px; padding: 14px 16px; border-radius: 10px; background: var(--card);
+             border: 1px solid var(--card-border); font-size: 13px; line-height: 1.6; color: var(--text); }
+  .phrases p + p { margin-top: 4px; }
+  .tuiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 16px; }
+  .tuile { padding: 12px 14px; border-radius: 10px; background: var(--card); border: 1px solid var(--card-border); }
+  .tuile .v { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .tuile .l { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .bloc { margin-top: 24px; }
+  .bloc h3 { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 10px; }
+  .bloc h3 small { color: var(--faint); font-weight: 400; margin-left: 6px; }
+  .barres { display: grid; grid-template-columns: minmax(120px, 42%) 1fr 54px; gap: 7px 10px; align-items: center; font-size: 12px; }
+  .barres .lib { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .barres .piste { height: 10px; position: relative; }
+  .barres .barre { height: 100%; background: var(--mark); border-radius: 0 4px 4px 0; min-width: 2px; transition: background .15s; }
+  .barres .ligne:hover .barre, .barres .piste:hover .barre { background: var(--mark-hover); }
+  .barres .val { text-align: right; color: var(--text); font-variant-numeric: tabular-nums; }
+  .barres .masque { color: var(--faint); font-style: italic; }
+  .badge { font-size: 10px; padding: 1px 6px; border-radius: 999px; border: 1px solid rgba(245,195,91,.5); color: var(--or); margin-left: 6px; }
+  .courbe { width: 100%; height: 150px; display: block; overflow: visible; }
+  .courbe .grille line { stroke: rgba(140,210,200,.08); }
+  .courbe .axe text { fill: var(--faint); font-size: 10px; }
+  .courbe .serie { fill: none; stroke: var(--mark); stroke-width: 2; }
+  .courbe .aire { fill: url(#aireDegrade); }
+  .courbe .curseur { stroke: rgba(230,239,238,.35); stroke-dasharray: 3 3; }
+  .courbe .point { fill: var(--mark-hover); stroke: var(--surface); stroke-width: 2; }
+  .note { font-size: 11px; color: var(--faint); margin-top: 22px; line-height: 1.5; }
+  #infobulle {
+    position: fixed; z-index: 10; pointer-events: none; padding: 6px 10px; border-radius: 8px; font-size: 12px;
+    background: #12292b; border: 1px solid var(--card-border); color: var(--text); opacity: 0; transition: opacity .1s;
+    white-space: nowrap;
+  }
+  #infobulle small { color: var(--muted); display: block; }
+</style>
+</head>
+<body>
+
+<header>
+  <div><b>MIKI</b> · Tableau de bord DIHAL <span style="color:var(--faint)">— lecture seule, données anonymes</span></div>
+  <div class="kpis-globaux" id="kpis"></div>
+  <div style="display:flex;gap:14px;align-items:center">
+    <input class="recherche" id="recherche" type="search" placeholder="Rechercher un département…" aria-label="Rechercher un département">
+    <div class="filtres" role="group" aria-label="Source des données">
+      <button data-source="tous" class="actif">Tout</button>
+      <button data-source="direct">Appels réels</button>
+      <button data-source="simule">Scénarios simulés</button>
+    </div>
+    <span class="direct" id="direct" title="Mise à jour en temps réel"><i></i>direct</span>
+  </div>
+</header>
+
+<div class="stage" id="stage">
+  <svg class="liens" id="liens"></svg>
+  <div class="colonne gauche" id="gauche"></div>
+
+  <div class="centre">
+    <div class="halo"></div>
+    <div style="display:grid;place-items:center;position:relative">
+      <svg id="logo" viewBox="0 0 200 160" aria-label="Logo MIKI">
+        <defs>
+          <clipPath id="ouverture"><path id="clip" d=""/></clipPath>
+          <linearGradient id="degrade" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="150">
+            <stop offset="0" stop-color="#2a8f86"/>
+            <stop offset=".55" stop-color="#5fd4c4"/>
+            <stop offset="1" stop-color="#c9f3ec"/>
+          </linearGradient>
+          <radialGradient id="iris" cx=".38" cy=".35" r=".7">
+            <stop offset="0" stop-color="#fff1c9"/>
+            <stop offset=".45" stop-color="#f5c35b"/>
+            <stop offset="1" stop-color="#d98a12"/>
+          </radialGradient>
+        </defs>
+        <path class="trait onde o1" d="M14,72 Q100,-14 186,72"/>
+        <path class="trait onde o2" d="M38,88 Q100,26 162,88"/>
+        <g clip-path="url(#ouverture)"><circle id="pupille" cx="100" cy="112" r="14"/></g>
+        <path class="trait" id="paupiere-haut" d=""/>
+        <path class="trait" id="paupiere-bas" d="M66,122 Q100,146 134,122"/>
+      </svg>
+      <div class="marque">miki</div>
+      <div class="sous">parmi les appelants de MIKI</div>
+    </div>
+  </div>
+
+  <div class="colonne droite" id="droite"></div>
+</div>
+
+<div class="legende"><span>Moins d'appels</span><span class="rampe"></span><span>Plus d'appels</span>
+  <span style="margin-left:10px">· pointillés : non couvert par MIKI</span></div>
+
+<aside class="panneau" id="panneau" aria-live="polite">
+  <button class="fermer" id="fermer">Fermer ✕</button>
+  <div id="contenu"></div>
+</aside>
+<div id="infobulle"></div>
+
+<script>
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmt = n => n === null || n === undefined ? "<5" : n.toLocaleString("fr-FR");
+const duree = s => s ? `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, "0")}` : "—";
+let source = "tous", selection = null;
+
+// ---------- Infobulle ----------
+const bulle = document.getElementById("infobulle");
+function montrer(e, html) { bulle.innerHTML = html; bulle.style.opacity = 1; placer(e); }
+function placer(e) {
+  const w = bulle.offsetWidth;
+  bulle.style.left = Math.min(e.clientX + 14, innerWidth - w - 8) + "px";
+  bulle.style.top = (e.clientY + 14) + "px";
+}
+function cacher() { bulle.style.opacity = 0; }
+
+// ---------- Départements autour de l'œil ----------
+const gauche = document.getElementById("gauche"), droite = document.getElementById("droite");
+const liens = document.getElementById("liens"), logo = document.getElementById("logo");
+
+async function chargerDepartements() {
+  const depts = await (await fetch(`/api/dihal/departements?source=${source}`)).json();
+  gauche.innerHTML = droite.innerHTML = "";
+  // ordre administratif : la Corse (2A, 2B) se range entre le 19 et le 21
+  const cle = c => c.replace("2A", "20.1").replace("2B", "20.2");
+  depts.sort((a, b) => cle(a.code).localeCompare(cle(b.code), "fr", { numeric: true }));
+  const max = Math.max(...depts.map(d => d.appels || 0), 1), moitie = Math.ceil(depts.length / 2);
+  depts.forEach((d, i) => {
+    const el = document.createElement("button");
+    el.className = "dept" + (d.couvert ? "" : " hors-zone") + (selection === d.code ? " selection" : "");
+    el.dataset.code = d.code;
+    el.dataset.recherche = `${d.code} ${d.nom} ${d.siao}`.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+    // intensité proportionnelle au volume (une seule teinte, du clair au soutenu)
+    el.style.setProperty("--intensite", d.couvert ? (0.04 + 0.8 * (d.appels || 0) / max).toFixed(3) : 0);
+    el.setAttribute("aria-label", `${d.code} ${d.nom}`);
+    el.innerHTML = `<span class="num">${esc(d.code)}</span><span class="n">${d.couvert ? fmt(d.appels) + " appels" : "non couvert"}</span>`;
+    el.addEventListener("click", () => ouvrir(d.code));
+    el.addEventListener("mouseenter", () => lien(d.code)?.classList.add("actif"));
+    el.addEventListener("mousemove", e => montrer(e, `<b>${esc(d.code)} · ${esc(d.nom)}</b><small>${esc(d.siao)}</small>` + (d.couvert
+      ? `<small>${fmt(d.appels)} appels · ${fmt(d.femmes)} femmes · délai ${d.delai_moyen_s ? Math.round(d.delai_moyen_s / 60) + " min" : "—"} · ${fmt(d.sans_place)} sans place</small>`
+      : `<small>Non couvert par MIKI</small>`)));
+    el.addEventListener("mouseleave", () => { cacher(); if (selection !== d.code) lien(d.code)?.classList.remove("actif"); });
+    (i < moitie ? gauche : droite).appendChild(el);
+  });
+  filtrer();
+  tracerLiens();
+  const global = await (await fetch(`/api/dihal/stats?source=${source}`)).json();
+  const r = global.resume;
+  document.getElementById("kpis").innerHTML = global.masque
+    ? `<span>Trop peu d'appels pour publier des chiffres</span>`
+    : `<span><b>${fmt(r.appels)}</b> appels</span>
+       <span><b>${r.appels ? Math.round(100 * (r.femmes || 0) / r.appels) : 0} %</b> de femmes</span>
+       <span>délai moyen <b>${duree(r.delai_moyen_s)}</b></span>
+       <span><b>${fmt(r.sans_place)}</b> sans place</span>`;
+}
+
+const champ = document.getElementById("recherche");
+function filtrer() {
+  const q = champ.value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+  document.querySelectorAll(".dept").forEach(el => el.classList.toggle("estompe", !!q && !el.dataset.recherche.includes(q)));
+}
+champ.addEventListener("input", filtrer);
+champ.addEventListener("keydown", e => {
+  if (e.key !== "Enter") return;
+  const premier = document.querySelector(".dept:not(.estompe)");
+  if (premier) ouvrir(premier.dataset.code);
+});
+
+const lien = code => liens.querySelector(`path[data-code="${CSS.escape(code)}"]`);
+function tracerLiens() {
+  const s = document.getElementById("stage").getBoundingClientRect();
+  const l = logo.getBoundingClientRect();
+  const cy = l.top + l.height * 0.62 - s.top, cx = l.left + l.width / 2 - s.left;
+  liens.innerHTML = "";
+  document.querySelectorAll(".dept").forEach(el => {
+    const r = el.getBoundingClientRect(), aGauche = el.parentElement === gauche;
+    const x = (aGauche ? r.right : r.left) - s.left, y = r.top + r.height / 2 - s.top;
+    const depart = cx + (aGauche ? -l.width * 0.45 : l.width * 0.45), mx = (depart + x) / 2;
+    const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    p.setAttribute("d", `M${depart},${cy} C${mx},${cy} ${mx},${y} ${x},${y}`);
+    p.dataset.code = el.dataset.code;
+    if (el.dataset.code === selection) p.classList.add("actif");
+    liens.appendChild(p);
+  });
+}
+addEventListener("resize", tracerLiens);
+
+// ---------- Panneau de statistiques d'un département ----------
+const panneau = document.getElementById("panneau"), contenu = document.getElementById("contenu");
+document.getElementById("fermer").addEventListener("click", fermer);
+addEventListener("keydown", e => { if (e.key === "Escape") fermer(); });
+
+function fermer() {
+  selection = null; panneau.classList.remove("ouvert");
+  document.querySelectorAll(".dept.selection").forEach(e => e.classList.remove("selection"));
+  liens.querySelectorAll("path.actif").forEach(p => p.classList.remove("actif"));
+}
+
+async function ouvrir(code) {
+  selection = code;
+  document.querySelectorAll(".dept").forEach(e => e.classList.toggle("selection", e.dataset.code === code));
+  liens.querySelectorAll("path").forEach(p => p.classList.toggle("actif", p.dataset.code === code));
+  const [d, depts] = await Promise.all([
+    (await fetch(`/api/dihal/stats?source=${source}&departement=${encodeURIComponent(code)}`)).json(),
+    (await fetch(`/api/dihal/departements?source=${source}`)).json(),
+  ]);
+  const info = depts.find(x => x.code === code) || {};
+  const r = d.resume;
+  let html = `<h2>${esc(info.code)} · ${esc(info.nom)}</h2><div class="siao">${esc(info.siao)}${info.couvert ? "" : " — non couvert par MIKI"}</div>
+    <div class="phrases">${d.phrases.map(p => `<p>${esc(p)}</p>`).join("")}</div>`;
+  if (!d.masque) {
+    html += `<div class="tuiles">
+      ${tuile(fmt(r.appels), "appels")}
+      ${tuile(r.appels && r.femmes !== null ? Math.round(100 * r.femmes / r.appels) + " %" : "<5", "de femmes")}
+      ${tuile(duree(r.delai_moyen_s), "délai avant fiche")}
+      ${tuile(fmt(r.urgents), "urgence haute ou vitale")}
+      ${tuile(fmt(r.sans_place), "sans place disponible")}
+      ${tuile(fmt(r.langue_non_couverte), "langue non couverte")}
+    </div>
+    <div class="bloc"><h3>Appels par semaine</h3>${courbe(d.semaines)}</div>
+    ${barres("Causes de mise à la rue", d.causes, r.appels)}
+    ${barres("Tranches d'âge", d.ages, r.appels)}
+    ${barres("Sexe", d.sexe, r.appels)}
+    ${barres("Profils", d.profils, r.appels)}
+    ${barres("Langues", d.langues, r.appels, l => l.couverte === false ? `<span class="badge">sans écoutant</span>` : "")}
+    ${barres("Issues des appels", d.issues, r.appels)}
+    ${barres("Besoins non couverts", d.besoins, r.appels, null, "à remonter en priorité")}`;
+  }
+  html += `<p class="note">Données anonymes : aucun nom, aucun numéro, aucun lien vers une personne. Les effectifs inférieurs à ${d.seuil} sont masqués (« &lt;5 »).
+    Ces chiffres décrivent les appelants de MIKI, pas l'ensemble des personnes sans domicile en France.
+    Source affichée : ${{tous: "appels réels et scénarios simulés", direct: "appels réels uniquement", simule: "scénarios simulés uniquement"}[source]}.</p>`;
+  contenu.innerHTML = html;
+  panneau.classList.add("ouvert");
+  brancherInfobulles();
+}
+
+const tuile = (v, l) => `<div class="tuile"><div class="v">${esc(v)}</div><div class="l">${esc(l)}</div></div>`;
+
+function barres(titre, lignes, total, extra, sous) {
+  if (!lignes || !lignes.length) return `<div class="bloc"><h3>${esc(titre)}</h3><div class="barres"><span class="lib">Aucune donnée</span></div></div>`;
+  const max = Math.max(...lignes.map(l => l.n || 0), 1);
+  return `<div class="bloc"><h3>${esc(titre)}${sous ? `<small>${esc(sous)}</small>` : ""}</h3><div class="barres">` +
+    lignes.map(l => {
+      const pct = l.n && total ? Math.round(100 * l.n / total) : null;
+      return `<span class="lib" title="${esc(l.cle)}">${esc(l.cle)}${extra ? extra(l) : ""}</span>
+        <span class="piste" data-bulle="${esc(l.cle)}|${l.n === null ? "moins de 5 (masqué)" : fmt(l.n) + " appels" + (pct !== null ? " · " + pct + " %" : "")}">
+          ${l.n === null ? "" : `<div class="barre" style="width:${(100 * l.n / max).toFixed(1)}%"></div>`}</span>
+        <span class="val ${l.n === null ? "masque" : ""}">${l.n === null ? "&lt;5" : fmt(l.n)}</span>`;
+    }).join("") + `</div></div>`;
+}
+
+function courbe(points) {
+  if (!points || points.length < 2) return `<div class="barres"><span class="lib">Pas assez de semaines</span></div>`;
+  const W = 460, H = 150, g = 28, b = 20, h = 8;
+  const vals = points.map(p => p.n || 0), max = Math.max(...vals, 1);
+  const x = i => g + (W - g - 8) * i / (points.length - 1), y = v => H - b - (H - b - h) * v / max;
+  // une semaine masquée (moins de 5 appels) coupe la ligne au lieu d'être tracée à 0
+  const segments = [];
+  points.forEach((p, i) => {
+    if (p.n === null) return;
+    if (i === 0 || points[i - 1].n === null) segments.push([]);
+    segments.at(-1).push(i);
+  });
+  const ligne = seg => seg.map((i, k) => `${k ? "L" : "M"}${x(i).toFixed(1)},${y(points[i].n).toFixed(1)}`).join("");
+  const tracé = segments.map(ligne).join("");
+  const aire = segments.map(seg => `${ligne(seg)}L${x(seg.at(-1))},${H - b}L${x(seg[0])},${H - b}Z`).join("");
+  const nbMasques = points.filter(p => p.n === null).length;
+  const graduations = [0, Math.round(max / 2), max];
+  const moisFmt = s => new Date(s).toLocaleDateString("fr-FR", { day: "numeric", month: "short" });
+  return `<svg class="courbe" viewBox="0 0 ${W} ${H}" data-points='${esc(JSON.stringify(points))}' data-max="${max}">
+    <defs><linearGradient id="aireDegrade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1fa594" stop-opacity=".35"/><stop offset="1" stop-color="#1fa594" stop-opacity="0"/></linearGradient></defs>
+    <g class="grille">${graduations.map(v => `<line x1="${g}" x2="${W - 8}" y1="${y(v)}" y2="${y(v)}"/>`).join("")}</g>
+    <g class="axe">${graduations.map(v => `<text x="${g - 6}" y="${y(v) + 3}" text-anchor="end">${v}</text>`).join("")}
+      <text x="${x(0)}" y="${H - 4}">${moisFmt(points[0].semaine)}</text>
+      <text x="${x(points.length - 1)}" y="${H - 4}" text-anchor="end">${moisFmt(points.at(-1).semaine)}</text></g>
+    <path class="aire" d="${aire}"/>
+    <path class="serie" d="${tracé}"/>
+    ${segments.filter(seg => seg.length === 1).map(([i]) => `<circle cx="${x(i)}" cy="${y(points[i].n)}" r="4" fill="#1fa594"/>`).join("")}
+    <line class="curseur" y1="${h}" y2="${H - b}" style="display:none"/>
+    <circle class="point" r="4.5" style="display:none"/>
+    <rect x="${g}" y="0" width="${W - g}" height="${H}" fill="transparent" class="zone"/>
+  </svg>${nbMasques ? `<div class="note" style="margin-top:4px">${nbMasques} semaine(s) sous le seuil de diffusion : ligne interrompue.</div>` : ""}`;
+}
+
+function brancherInfobulles() {
+  contenu.querySelectorAll("[data-bulle]").forEach(el => {
+    const [titre, val] = el.dataset.bulle.split("|");
+    el.addEventListener("mousemove", e => montrer(e, `${esc(val)}<small>${esc(titre)}</small>`));
+    el.addEventListener("mouseleave", cacher);
+  });
+  contenu.querySelectorAll("svg.courbe").forEach(svg => {
+    const points = JSON.parse(svg.dataset.points), max = +svg.dataset.max;
+    const W = 460, H = 150, g = 28, b = 20, h = 8;
+    const x = i => g + (W - g - 8) * i / (points.length - 1), y = v => H - b - (H - b - h) * v / max;
+    const curseur = svg.querySelector(".curseur"), point = svg.querySelector(".point");
+    svg.querySelector(".zone").addEventListener("mousemove", e => {
+      const r = svg.getBoundingClientRect(), px = (e.clientX - r.left) * W / r.width;
+      const i = Math.max(0, Math.min(points.length - 1, Math.round((px - g) / (W - g - 8) * (points.length - 1))));
+      const p = points[i];
+      curseur.setAttribute("x1", x(i)); curseur.setAttribute("x2", x(i)); curseur.style.display = "";
+      point.setAttribute("cx", x(i)); point.setAttribute("cy", y(p.n || 0)); point.style.display = p.n === null ? "none" : "";
+      montrer(e, `${p.n === null ? "moins de 5" : fmt(p.n) + " appels"}<small>semaine du ${new Date(p.semaine).toLocaleDateString("fr-FR")}</small>`);
+    });
+    svg.querySelector(".zone").addEventListener("mouseleave", () => { curseur.style.display = point.style.display = "none"; cacher(); });
+  });
+}
+
+// ---------- Filtre source ----------
+document.querySelectorAll(".filtres button").forEach(b => b.addEventListener("click", () => {
+  source = b.dataset.source;
+  document.querySelectorAll(".filtres button").forEach(x => x.classList.toggle("actif", x === b));
+  rafraichir();
+}));
+
+async function rafraichir() {
+  await chargerDepartements();
+  if (selection) ouvrir(selection);
+}
+
+// ---------- Temps réel : chaque fin d'appel met à jour les chiffres ----------
+let attente = null;
+function connecterDirect() {
+  const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+  const voyant = document.getElementById("direct");
+  ws.onopen = () => voyant.classList.add("on");
+  ws.onmessage = () => { clearTimeout(attente); attente = setTimeout(rafraichir, 800); };
+  ws.onclose = () => { voyant.classList.remove("on"); setTimeout(connecterDirect, 3000); };
+}
+
+// ---------- L'œil : paupière, clignement, pupille qui suit la souris ----------
+const haut = document.getElementById("paupiere-haut"), clip = document.getElementById("clip");
+const pupille = document.getElementById("pupille");
+const OUVERT = 64, FERME = 132;
+let fermeture = 0;
+function dessinerPaupiere() {
+  const cy = OUVERT + (FERME - OUVERT) * fermeture;
+  haut.setAttribute("d", `M56,110 Q100,${cy} 144,110`);
+  clip.setAttribute("d", `M56,110 Q100,${cy} 144,110 Q100,150 56,110 Z`);
+}
+function cligner(apres) {
+  const duree = 170, t0 = performance.now();
+  (function pas(t) {
+    const k = Math.max(0, Math.min((t - t0) / duree, 1));   // le temps d'image peut précéder t0
+    fermeture = k < 0.5 ? k * 2 : (1 - k) * 2;
+    dessinerPaupiere();
+    if (k < 1) requestAnimationFrame(pas); else { fermeture = 0; dessinerPaupiere(); apres && apres(); }
+  })(t0);
+}
+function programmerClignement() {
+  setTimeout(() => {
+    if (Math.random() < 0.2) cligner(() => setTimeout(() => cligner(programmerClignement), 120));
+    else cligner(programmerClignement);
+  }, 4500 + Math.random() * 1000);
+}
+let cible = { x: 0, y: 0 }, pos = { x: 0, y: 0 };
+addEventListener("mousemove", e => {
+  const r = logo.getBoundingClientRect();
+  const dx = e.clientX - (r.left + r.width / 2), dy = e.clientY - (r.top + r.height * 0.7);
+  const dist = Math.hypot(dx, dy) || 1, force = Math.min(dist / 300, 1);
+  cible = { x: dx / dist * 18 * force, y: dy / dist * 7 * force };
+});
+document.addEventListener("mouseleave", () => { cible = { x: 0, y: 0 }; });
+(function suivre() {
+  pos.x += (cible.x - pos.x) * 0.15; pos.y += (cible.y - pos.y) * 0.15;
+  pupille.setAttribute("cx", 100 + pos.x); pupille.setAttribute("cy", 112 + pos.y);
+  requestAnimationFrame(suivre);
+})();
+
+dessinerPaupiere();
+programmerClignement();
+chargerDepartements().then(() => {
+  const d = new URLSearchParams(location.search).get("dept");   // lien direct : /?dept=93
+  if (d) ouvrir(d);
+});
+connecterDirect();
+</script>
+</body>
+</html>

@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>MIKI · DIHAL — maquette de l'œil</title>
+<style>
+  :root {
+    --bg: #061113;
+    --card: rgba(255, 255, 255, 0.035);
+    --card-border: rgba(140, 210, 200, 0.16);
+    --text: #e6efee;
+    --muted: #7f9a97;
+    --teal: #5fd4c4;
+    --teal-clair: #c9f3ec;
+    --or: #f5c35b;
+    --line: rgba(140, 210, 200, 0.22);
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; }
+  body {
+    background: radial-gradient(ellipse at 50% 45%, #0e2a2c 0%, var(--bg) 60%);
+    color: var(--text);
+    font-family: -apple-system, "Inter", "Segoe UI", sans-serif;
+    overflow: hidden;
+  }
+  header {
+    position: absolute; top: 0; left: 0; right: 0;
+    padding: 20px 32px; display: flex; justify-content: space-between; align-items: center;
+    font-size: 14px; color: var(--muted); z-index: 2;
+  }
+  header b { color: var(--text); font-weight: 600; letter-spacing: .02em; }
+  .tag { border: 1px solid var(--card-border); border-radius: 999px; padding: 4px 12px; font-size: 12px; }
+
+  .stage {
+    position: relative; height: 100%;
+    display: grid; grid-template-columns: 1fr minmax(320px, 1.1fr) 1fr;
+    align-items: center; padding: 70px 48px 40px;
+  }
+  svg.liens { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  svg.liens path { fill: none; stroke: var(--line); stroke-width: 1.2; transition: stroke .2s, stroke-width .2s; }
+  svg.liens path.actif { stroke: #f5c35b; stroke-width: 2; filter: drop-shadow(0 0 6px #f5c35b); }
+
+  .colonne { display: flex; flex-direction: column; gap: 16px; position: relative; z-index: 1; }
+  .colonne.gauche { align-items: flex-end; }
+  .colonne.droite { align-items: flex-start; }
+
+  .dept {
+    width: 250px; padding: 14px 16px; border-radius: 12px;
+    background: var(--card); border: 1px solid var(--card-border);
+    backdrop-filter: blur(6px); cursor: pointer;
+    transition: border-color .2s, transform .2s, box-shadow .2s;
+  }
+  .dept:hover, .dept.selection {
+    border-color: rgba(245, 195, 91, .7); transform: scale(1.03);
+    box-shadow: 0 0 24px rgba(245, 195, 91, .15);
+  }
+  .dept .haut { display: flex; align-items: baseline; gap: 10px; }
+  .dept .num { font-size: 22px; font-weight: 600; }
+  .dept .nom { font-size: 13px; color: var(--muted); }
+  .dept .bas { display: flex; gap: 14px; margin-top: 8px; font-size: 12px; color: var(--muted); }
+  .dept .bas span b { color: var(--text); font-weight: 600; }
+
+  .centre { position: relative; display: grid; place-items: center; z-index: 1; }
+  .halo {
+    position: absolute; width: 380px; height: 380px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(95,212,196,.10) 0%, rgba(95,212,196,.03) 55%, transparent 70%);
+    border: 1px solid rgba(140, 210, 200, .07);
+  }
+  .halo::after {
+    content: ""; position: absolute; inset: 50px; border-radius: 50%;
+    border: 1px dashed rgba(140, 210, 200, .10);
+  }
+  #logo { width: 260px; overflow: visible; filter: drop-shadow(0 0 10px rgba(95,212,196,.55)) drop-shadow(0 0 28px rgba(95,212,196,.25)); }
+  #logo .trait { fill: none; stroke: url(#degrade); stroke-width: 8; stroke-linecap: round; }
+  #logo .onde { animation: onde 2.4s ease-in-out infinite; }
+  #logo .onde.o2 { animation-delay: .25s; }
+  @keyframes onde { 0%, 100% { opacity: .35; } 40% { opacity: 1; } }
+  #logo #pupille { fill: url(#iris); filter: drop-shadow(0 0 8px rgba(245,195,91,.9)); }
+  .marque { margin-top: 6px; font-size: 34px; font-weight: 600; letter-spacing: .12em;
+            background: linear-gradient(90deg, var(--teal-clair), var(--teal));
+            -webkit-background-clip: text; background-clip: text; color: transparent;
+            filter: drop-shadow(0 0 12px rgba(95,212,196,.45)); }
+  .sous { font-size: 12px; color: var(--muted); margin-top: 4px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div><b>MIKI</b> · Tableau de bord DIHAL</div>
+  <div class="tag">Maquette · données fictives</div>
+</header>
+
+<div class="stage" id="stage">
+  <svg class="liens" id="liens"></svg>
+
+  <div class="colonne gauche" id="gauche"></div>
+
+  <div class="centre">
+    <div class="halo"></div>
+    <div style="display:grid;place-items:center;position:relative">
+      <svg id="logo" viewBox="0 0 200 160" aria-label="Logo MIKI">
+        <defs>
+          <clipPath id="ouverture"><path id="clip" d=""/></clipPath>
+          <linearGradient id="degrade" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="150">
+            <stop offset="0" stop-color="#2a8f86"/>
+            <stop offset=".55" stop-color="#5fd4c4"/>
+            <stop offset="1" stop-color="#c9f3ec"/>
+          </linearGradient>
+          <radialGradient id="iris" cx=".38" cy=".35" r=".7">
+            <stop offset="0" stop-color="#fff1c9"/>
+            <stop offset=".45" stop-color="#f5c35b"/>
+            <stop offset="1" stop-color="#d98a12"/>
+          </radialGradient>
+        </defs>
+        <path class="trait onde o1" d="M14,72 Q100,-14 186,72"/>
+        <path class="trait onde o2" d="M38,88 Q100,26 162,88"/>
+        <g clip-path="url(#ouverture)">
+          <circle id="pupille" cx="100" cy="112" r="14"/>
+        </g>
+        <path class="trait" id="paupiere-haut" d=""/>
+        <path class="trait" id="paupiere-bas" d="M66,122 Q100,146 134,122"/>
+      </svg>
+      <div class="marque">miki</div>
+      <div class="sous">parmi les appelants de MIKI</div>
+    </div>
+  </div>
+
+  <div class="colonne droite" id="droite"></div>
+</div>
+
+<script>
+// --- Départements fictifs (maquette) ---
+const depts = [
+  { num: "75", nom: "Paris",              appels: 48, femmes: 19, attente: "6 min" },
+  { num: "93", nom: "Seine-Saint-Denis",  appels: 41, femmes: 15, attente: "9 min" },
+  { num: "13", nom: "Bouches-du-Rhône",   appels: 27, femmes: 9,  attente: "7 min" },
+  { num: "69", nom: "Rhône",              appels: 22, femmes: 8,  attente: "5 min" },
+  { num: "59", nom: "Nord",               appels: 19, femmes: 7,  attente: "8 min" },
+  { num: "33", nom: "Gironde",            appels: 14, femmes: 6,  attente: "4 min" },
+  { num: "31", nom: "Haute-Garonne",      appels: 12, femmes: 5,  attente: "6 min" },
+  { num: "44", nom: "Loire-Atlantique",   appels: 11, femmes: 4,  attente: "5 min" },
+  { num: "67", nom: "Bas-Rhin",           appels: 9,  femmes: 3,  attente: "7 min" },
+  { num: "06", nom: "Alpes-Maritimes",    appels: 8,  femmes: 3,  attente: "6 min" },
+];
+
+const gauche = document.getElementById("gauche");
+const droite = document.getElementById("droite");
+depts.forEach((d, i) => {
+  const el = document.createElement("div");
+  el.className = "dept";
+  el.dataset.i = i;
+  el.innerHTML = `
+    <div class="haut"><span class="num">${d.num}</span><span class="nom">SIAO ${d.nom}</span></div>
+    <div class="bas"><span><b>${d.appels}</b> appels</span><span><b>${d.femmes}</b> femmes</span><span>attente <b>${d.attente}</b></span></div>`;
+  (i % 2 === 0 ? gauche : droite).appendChild(el);
+});
+
+// --- Courbes entre le logo et chaque département ---
+const liens = document.getElementById("liens");
+const logo = document.getElementById("logo");
+function tracerLiens() {
+  const s = document.getElementById("stage").getBoundingClientRect();
+  const l = logo.getBoundingClientRect();
+  const cx = l.left + l.width / 2 - s.left, cy = l.top + l.height * 0.62 - s.top;
+  liens.innerHTML = "";
+  document.querySelectorAll(".dept").forEach(el => {
+    const r = el.getBoundingClientRect();
+    const aGauche = el.parentElement === gauche;
+    const x = (aGauche ? r.right : r.left) - s.left;
+    const y = r.top + r.height / 2 - s.top;
+    const depart = cx + (aGauche ? -l.width * 0.45 : l.width * 0.45);
+    const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    const mx = (depart + x) / 2;
+    p.setAttribute("d", `M${depart},${cy} C${mx},${cy} ${mx},${y} ${x},${y}`);
+    p.dataset.i = el.dataset.i;
+    liens.appendChild(p);
+  });
+}
+document.querySelectorAll(".dept").forEach(el => {
+  const lien = () => liens.querySelector(`path[data-i="${el.dataset.i}"]`);
+  el.addEventListener("mouseenter", () => lien()?.classList.add("actif"));
+  el.addEventListener("mouseleave", () => { if (!el.classList.contains("selection")) lien()?.classList.remove("actif"); });
+  el.addEventListener("click", () => {
+    document.querySelectorAll(".dept.selection").forEach(o => o.classList.remove("selection"));
+    liens.querySelectorAll("path.actif").forEach(p => p.classList.remove("actif"));
+    el.classList.add("selection");
+    lien()?.classList.add("actif");
+  });
+});
+window.addEventListener("resize", tracerLiens);
+tracerLiens();
+
+// --- L'œil : paupière, clignement, pupille qui suit la souris ---
+const haut = document.getElementById("paupiere-haut");
+const clip = document.getElementById("clip");
+const pupille = document.getElementById("pupille");
+const OUVERT = 64, FERME = 132;          // point de contrôle de la paupière haute
+let fermeture = 0;                        // 0 = ouvert, 1 = fermé
+
+function dessinerPaupiere() {
+  const cy = OUVERT + (FERME - OUVERT) * fermeture;
+  haut.setAttribute("d", `M56,110 Q100,${cy} 144,110`);
+  clip.setAttribute("d", `M56,110 Q100,${cy} 144,110 Q100,150 56,110 Z`);
+}
+
+function cligner(apres) {
+  const duree = 170, t0 = performance.now();
+  function pas(t) {
+    const k = Math.max(0, Math.min((t - t0) / duree, 1));   // le temps d'image peut précéder t0
+    fermeture = k < 0.5 ? k * 2 : (1 - k) * 2;   // descend puis remonte
+    dessinerPaupiere();
+    if (k < 1) requestAnimationFrame(pas); else { fermeture = 0; dessinerPaupiere(); apres && apres(); }
+  }
+  requestAnimationFrame(pas);
+}
+
+function programmerClignement() {
+  const delai = 4500 + Math.random() * 1000;     // environ toutes les 5 secondes
+  setTimeout(() => {
+    // de temps en temps, un double clignement pour faire plus naturel
+    if (Math.random() < 0.2) cligner(() => setTimeout(() => cligner(programmerClignement), 120));
+    else cligner(programmerClignement);
+  }, delai);
+}
+
+// Suivi de la souris, avec un léger lissage
+let cible = { x: 0, y: 0 }, pos = { x: 0, y: 0 };
+window.addEventListener("mousemove", e => {
+  const r = logo.getBoundingClientRect();
+  const ox = r.left + r.width / 2, oy = r.top + r.height * 0.7;
+  const dx = e.clientX - ox, dy = e.clientY - oy;
+  const dist = Math.hypot(dx, dy) || 1;
+  const force = Math.min(dist / 300, 1);
+  cible = { x: (dx / dist) * 18 * force, y: (dy / dist) * 7 * force };
+});
+document.addEventListener("mouseleave", () => { cible = { x: 0, y: 0 }; });
+(function suivre() {
+  pos.x += (cible.x - pos.x) * 0.15;
+  pos.y += (cible.y - pos.y) * 0.15;
+  pupille.setAttribute("cx", 100 + pos.x);
+  pupille.setAttribute("cy", 112 + pos.y);
+  requestAnimationFrame(suivre);
+})();
+
+dessinerPaupiere();
+programmerClignement();
+</script>
+</body>
+</html>

@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>MIKI · Écoutants</title>
+<style>
+  :root {
+    --bg: #061113; --card: rgba(255,255,255,.035); --card-border: rgba(140,210,200,.16);
+    --text: #e6efee; --muted: #8aa5a2; --faint: #5c7774; --teal: #5fd4c4; --or: #f5c35b;
+    --critique: #ff6b6b;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: radial-gradient(ellipse at 30% 0%, #0e2a2c 0%, var(--bg) 55%) fixed; color: var(--text);
+         font-family: -apple-system, "Inter", "Segoe UI", sans-serif; min-height: 100vh; }
+  header { display: flex; justify-content: space-between; align-items: center; padding: 18px 32px;
+           border-bottom: 1px solid var(--card-border); gap: 20px; }
+  header b { font-weight: 600; }
+  header a { color: var(--muted); font-size: 13px; text-decoration: none; }
+  select { background: #0b1d1f; color: var(--text); border: 1px solid var(--card-border); border-radius: 8px;
+           padding: 6px 10px; font: inherit; }
+  .direct { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+  .direct i { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+  .direct.on i { background: var(--teal); box-shadow: 0 0 8px var(--teal); }
+  main { display: grid; grid-template-columns: 1fr 340px; gap: 24px; padding: 24px 32px; align-items: start; }
+  h2 { font-size: 14px; font-weight: 600; color: var(--muted); margin-bottom: 12px; }
+  .fiche { display: grid; grid-template-columns: 54px 1fr; gap: 14px; padding: 16px; border-radius: 12px;
+           background: var(--card); border: 1px solid var(--card-border); margin-bottom: 12px; }
+  .fiche.securite { border-color: rgba(255,107,107,.6); box-shadow: 0 0 20px rgba(255,107,107,.12); }
+  .fiche.sans-place { border-style: dashed; }
+  .rang { font-size: 26px; font-weight: 600; text-align: center; font-variant-numeric: tabular-nums; }
+  .rang small { display: block; font-size: 10px; color: var(--faint); font-weight: 400; }
+  .ligne1 { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .nom { font-size: 16px; font-weight: 600; }
+  .badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--card-border); color: var(--muted); }
+  .badge.langue { color: var(--teal); border-color: rgba(95,212,196,.45); }
+  .badge.alerte { color: var(--or); border-color: rgba(245,195,91,.55); }
+  .badge.critique { color: var(--critique); border-color: rgba(255,107,107,.6); }
+  .badge.vivant { color: var(--teal); }
+  .meta { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .recit { font-size: 13px; line-height: 1.5; margin-top: 8px; }
+  .explication { font-size: 12px; color: var(--muted); margin-top: 8px; padding-left: 10px; border-left: 2px solid var(--card-border); }
+  .vide { color: var(--faint); font-size: 14px; padding: 30px 0; }
+  aside { position: sticky; top: 24px; padding: 18px; border-radius: 12px; background: var(--card); border: 1px solid var(--card-border); }
+  aside p { font-size: 12px; color: var(--muted); line-height: 1.5; margin-bottom: 14px; }
+  .place { display: grid; grid-template-columns: 22px 1fr auto; gap: 8px; align-items: center; padding: 8px 0;
+           border-top: 1px solid rgba(140,210,200,.08); font-size: 13px; }
+  .place .ordre { color: var(--faint); font-variant-numeric: tabular-nums; }
+  .place.zero .lib { color: var(--or); }
+  .place.zero .lib::after { content: " · sauté"; font-size: 11px; }
+  .compteur { display: flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
+  .compteur button { width: 26px; height: 26px; border-radius: 6px; border: 1px solid var(--card-border);
+                     background: none; color: var(--text); cursor: pointer; font-size: 15px; }
+  .compteur button:hover { border-color: var(--or); }
+  .compteur button:disabled { opacity: .3; cursor: default; }
+  .securite-regle { font-size: 12px; color: var(--muted); margin-top: 14px; }
+</style>
+</head>
+<body>
+<header>
+  <div><b>MIKI</b> · Écoutants du 115</div>
+  <div style="display:flex;gap:16px;align-items:center">
+    <label style="font-size:13px;color:var(--muted)">Département
+      <select id="dept"></select></label>
+    <span class="direct" id="direct"><i></i>direct</span>
+    <a href="/">Tableau de bord DIHAL →</a>
+  </div>
+</header>
+<main>
+  <section>
+    <h2 id="titre">File d'attente</h2>
+    <div id="file"></div>
+  </section>
+  <aside>
+    <h2>Places disponibles</h2>
+    <p>Ordre de priorité du département. Un profil sans place est sauté : les appelants concernés restent
+       en file avec la mention « aucune place ». Dès qu'une place se libère, l'ordre normal revient.</p>
+    <div id="places"></div>
+    <div class="securite-regle" id="regle"></div>
+  </aside>
+</main>
+
+<script>
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const PROFILS = { famille_enfants: "Famille avec enfant(s)", femme_enceinte: "Femme enceinte", personne_agee: "65 ans et plus",
+                  femme_seule: "Femme seule", couple: "Couple", homme_seul: "Homme seul" };
+const URGENCE = { 5: "vitale", 4: "très haute", 3: "haute", 2: "moyenne", 1: "basse" };
+const selDept = document.getElementById("dept");
+let dept = new URLSearchParams(location.search).get("dept") || "93";
+
+async function init() {
+  const depts = (await (await fetch("/api/dihal/departements")).json()).filter(d => d.couvert);
+  selDept.innerHTML = depts.map(d => `<option value="${esc(d.code)}">${esc(d.code)} · ${esc(d.nom)}</option>`).join("");
+  selDept.value = dept;
+  selDept.addEventListener("change", () => { dept = selDept.value; history.replaceState(null, "", `?dept=${dept}`); charger(); });
+  charger();
+  connecterDirect();
+}
+
+async function charger() {
+  const [file, places] = await Promise.all([
+    (await fetch(`/api/ecoutants/file/${encodeURIComponent(dept)}`)).json(),
+    (await fetch(`/api/places/${encodeURIComponent(dept)}`)).json(),
+  ]);
+  document.getElementById("titre").textContent = `File d'attente · ${file.length} fiche${file.length > 1 ? "s" : ""}`;
+  document.getElementById("file").innerHTML = file.length ? file.map(carte).join("")
+    : `<div class="vide">Aucune fiche en attente dans ce département.</div>`;
+  afficherPlaces(places);
+}
+
+function carte(f) {
+  const a = f.appelant, cas = f.cas_particuliers;
+  const nom = [a.prenom, a.nom].filter(Boolean).join(" ") || "Appelant non identifié";
+  const details = [a.age ? `${a.age} ans` : null, a.sexe, cas.nb_enfants ? `${cas.nb_enfants} enfant(s)` : null,
+                   f.localisation, f.cause ? f.cause.replaceAll("_", " ") : null].filter(Boolean);
+  const attente = Math.round((Date.now() - new Date(f.arrivee)) / 60000);
+  return `<article class="fiche${f.securite ? " securite" : ""}${f.aucune_place ? " sans-place" : ""}">
+    <div class="rang">${f.securite ? "!" : esc(f.rang ?? "–")}<small>${f.securite ? "sécurité" : "rang"}</small></div>
+    <div>
+      <div class="ligne1">
+        <span class="nom">${esc(nom)}</span>
+        <span class="badge langue">${esc(f.langue_nom || "langue ?")}</span>
+        ${f.langue_couverte === false ? `<span class="badge alerte">langue non couverte</span>` : ""}
+        ${f.securite ? `<span class="badge critique">règle de sécurité</span>` : ""}
+        ${f.aucune_place ? `<span class="badge alerte">aucune place, orientation alternative</span>` : ""}
+        ${f.en_cours ? `<span class="badge vivant">● appel en cours</span>` : ""}
+        <span class="badge">${esc(PROFILS[f.profil] || "profil indéterminé")}</span>
+        ${f.niveau_urgence ? `<span class="badge">urgence ${esc(URGENCE[f.niveau_urgence])}</span>` : ""}
+      </div>
+      <div class="meta">${esc(details.join(" · "))} · attend depuis ${attente} min${f.ecoutant ? ` · écoutant : ${esc(f.ecoutant)}` : ""}</div>
+      ${f.recit ? `<div class="recit">${esc(f.recit)}</div>` : ""}
+      ${f.explication ? `<div class="explication">${esc(f.explication)}</div>` : ""}
+    </div>
+  </article>`;
+}
+
+function afficherPlaces(p) {
+  document.getElementById("places").innerHTML = p.places.map((pl, i) => `
+    <div class="place${pl.disponibles === 0 ? " zero" : ""}">
+      <span class="ordre">${i + 1}</span><span class="lib">${esc(pl.libelle)}</span>
+      <span class="compteur">
+        <button data-profil="${esc(pl.profil)}" data-v="${pl.disponibles - 1}" ${pl.disponibles <= 0 ? "disabled" : ""} aria-label="Une place de moins">−</button>
+        <span>${pl.disponibles}/${pl.total}</span>
+        <button data-profil="${esc(pl.profil)}" data-v="${pl.disponibles + 1}" ${pl.disponibles >= pl.total ? "disabled" : ""} aria-label="Une place de plus">+</button>
+      </span>
+    </div>`).join("");
+  document.getElementById("regle").textContent =
+    `Passent devant tout (règles v${p.version}) : ${p.criteres_securite.map(c => c.replaceAll("_", " ")).join(", ")}.`;
+  document.querySelectorAll(".compteur button").forEach(b => b.addEventListener("click", async () => {
+    b.disabled = true;
+    await fetch("/api/places", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ departement: dept, profil: b.dataset.profil, disponibles: +b.dataset.v }) });
+    charger();
+  }));
+}
+
+let attente = null;
+function connecterDirect() {
+  const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+  const voyant = document.getElementById("direct");
+  ws.onopen = () => voyant.classList.add("on");
+  ws.onmessage = e => {
+    if (JSON.parse(e.data).departement !== dept) return;
+    clearTimeout(attente); attente = setTimeout(charger, 300);
+  };
+  ws.onclose = () => { voyant.classList.remove("on"); setTimeout(connecterDirect, 3000); };
+}
+init();
+</script>
+</body>
+</html>
