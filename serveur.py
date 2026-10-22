@@ -131,7 +131,7 @@ async def api_file(dept: str):
     async with app.state.pool.acquire() as conn:
         rows = await conn.fetch("""
             SELECT f.id, f.appel_id, f.profil, f.rang, f.securite, f.aucune_place, f.niveau_urgence, f.complet, f.cause,
-                   f.localisation, f.creee_le, f.contenu, a.langue, a.langue_couverte, a.statut,
+                   f.localisation, f.creee_le, f.contenu, f.place_liberee_le, a.langue, a.langue_couverte, a.statut,
                    e.prenom AS ecoutant,
                    (SELECT explication FROM decisions_priorite d WHERE d.fiche_id = f.id
                     ORDER BY decidee_le DESC LIMIT 1) AS explication
@@ -151,6 +151,7 @@ async def api_file(dept: str):
             "langue": r["langue"], "langue_nom": stats.LANGUES.get(r["langue"], r["langue"]),
             "langue_couverte": r["langue_couverte"], "en_cours": r["statut"] == "en_cours",
             "ecoutant": r["ecoutant"], "explication": r["explication"],
+            "place_liberee": r["place_liberee_le"].isoformat() if r["place_liberee_le"] else None,
             "appelant": c.get("appelant") or {}, "recit": (c.get("situation") or {}).get("recit"),
             "cas_particuliers": c.get("cas_particuliers") or {},
         })
