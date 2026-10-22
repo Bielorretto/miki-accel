@@ -245,8 +245,10 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt
 const fmt = n => n === null || n === undefined ? "<5" : n.toLocaleString("fr-FR");
 const duree = s => s ? `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, "0")}` : "—";
 let source = "tous", selection = null;
-// vue écoutants : dashboard.py, sur la même machine (port 8115 par défaut)
-document.getElementById("lien-ecoutants").href = `${location.protocol}//${location.hostname}:8115/`;
+// vue écoutants : en local, dashboard.py sur la même machine (port 8115) ; en ligne (Aiven Runtime),
+// la vue /ecoutants du serveur, qui lit la base (les conteneurs ne partagent pas de fichiers)
+const enLocal = ["localhost", "127.0.0.1"].includes(location.hostname);
+document.getElementById("lien-ecoutants").href = enLocal ? `${location.protocol}//${location.hostname}:8115/` : "/ecoutants";
 let departements = [];   // dernière liste chargée, pour le résumé par région
 
 // régions administratives (2016) → départements ; la base ne stocke pas la région

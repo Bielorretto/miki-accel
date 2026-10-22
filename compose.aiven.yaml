@@ -1,0 +1,37 @@
+# Déploiement sur Aiven Runtime.
+#
+# Deux applications, sans service de données ici : la base PostgreSQL et le Valkey existent déjà
+# sur Aiven. Après le scan, les connecter à chaque application (Connected services) avec les
+# variables DATABASE_URL et VALKEY_URL, puis ajouter les clés API en secrets (voir le README).
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      DB_POOL_MAX: "4"
+
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    environment:
+      DB_POOL_MAX: "3"
+      TALKER_MODEL: "claude:claude-haiku-5-5,openai/gpt-oss-120b"
+      THINKER_MODELS: "claude:claude-haiku-5-5,groq:openai/gpt-oss-120b"
+      STT_PROVIDER: "elevenlabs"
+      STT_LANGUAGE: "fr"
+      TTS_PROVIDER: "elevenlabs"
+      TTS_LANGUAGE: "fr"
+      ELEVEN_MODEL: "eleven_flash_v2_5"
+      ELEVEN_VOICE_ID: "YxrwjAKoUKULGd0g8K9Y"
+      ELEVEN_SPEED: "0.9"
+      MIKI_VOLUME: "2.0"
+      FIN_DE_TOUR_MIN_S: "0.2"
+      FIN_DE_TOUR_MAX_S: "1.0"
+      # dans le cloud, le réseau est bon : le détecteur de fin de tour de LiveKit Cloud est le meilleur
+      TURN_DETECTOR: "v1"
+      NOISE_CANCELLATION: "bvc"

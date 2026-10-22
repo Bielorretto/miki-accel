@@ -131,6 +131,28 @@ venv/bin/python agent.py console      # parler à MIKI avec le micro du Mac, san
 venv/bin/python serveur.py            # dashboards : http://localhost:8000 et /ecoutants
 ```
 
+## Déploiement sur Aiven Runtime
+
+Le dépôt contient tout ce qu'il faut : `compose.aiven.yaml` (le manifeste), `Dockerfile` (serveur
+web, port 8080) et `Dockerfile.agent` (MIKI, sans port : il se connecte lui-même à LiveKit).
+
+1. Console Aiven → projet → **Runtime** → **Deploy application** → dépôt `miki-accel`, branche
+   `main` → manifeste `compose.aiven.yaml` → **Scan**. Deux applications sont détectées : `web` et
+   `agent`.
+2. Pour **chaque** application, **Connected services** → connecter le service PostgreSQL existant
+   (variable `DATABASE_URL`) et le service Valkey existant (variable `VALKEY_URL`).
+3. Ajouter les **secrets** :
+   - `web` : `MIKI_HMAC_SECRET`
+   - `agent` : `MIKI_HMAC_SECRET`, `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`,
+     `ANTHROPIC_API_KEY`, `ELEVEN_API_KEY`, `GROQ_API_KEY`
+   Le même `MIKI_HMAC_SECRET` partout, celui de la base actuelle : sinon les appelants déjà
+   connus ne sont plus reconnus.
+4. **Deploy**. L'adresse publique du tableau de bord apparaît dans **Connection information** de
+   l'application `web`.
+
+Un push sur GitHub ne redéploie pas : **Actions** → **Deploy latest commit**. Une fois l'agent en
+ligne, arrêter celui qui tourne en local, sinon les appels se répartissent entre les deux.
+
 ## Téléphonie (Twilio → LiveKit)
 
 1. LiveKit : un trunk SIP entrant limité au numéro Twilio, et une règle de dispatch qui ouvre

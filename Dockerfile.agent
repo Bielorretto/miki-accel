@@ -1,0 +1,16 @@
+# Agent vocal MIKI (LiveKit Agents). Aucun port entrant : le worker se connecte lui-même à
+# LiveKit Cloud, qui lui envoie les appels téléphoniques.
+FROM python:3.13-slim
+
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+
+COPY *.py ./
+# modèles locaux (détection de parole, fin de tour) téléchargés à la construction de l'image,
+# pour ne pas les retélécharger à chaque démarrage
+RUN python agent.py download-files
+
+CMD ["python", "agent.py", "start"]

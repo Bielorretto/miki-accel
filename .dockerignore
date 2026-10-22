@@ -1,0 +1,16 @@
+.env
+.env.*
+.git
+venv
+.venv
+__pycache__
+*.pyc
+sessions
+dossiers
+maquettes
+references
+docs
+tests
+node_modules
+*.log
+.DS_Store
