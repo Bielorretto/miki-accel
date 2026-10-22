@@ -153,13 +153,15 @@ class Thinker:
         self.debut = time.strftime("%Y-%m-%dT%H:%M:%S")
         # "fournisseur:modèle", essayés dans l'ordre (repli si saturé ou quota dépassé)
         self.models = os.environ.get("THINKER_MODELS", "mistral:mistral-large-4").split(",")
+        # un client par fournisseur dont la clé est présente : une clé absente (Mistral, plus utilisé
+        # en production) ne doit pas faire planter l'appel, le modèle est simplement sauté
         self.groq = AsyncOpenAI(
-            api_key=os.environ.get("GROQ_API_KEY"), base_url="https://api.groq.com/openai/v1"
-        )
+            api_key=os.environ["GROQ_API_KEY"], base_url="https://api.groq.com/openai/v1"
+        ) if os.environ.get("GROQ_API_KEY") else None
         self.mistral = AsyncOpenAI(
-            api_key=os.environ.get("MISTRAL_API_KEY"), base_url="https://api.mistral.ai/v1",
+            api_key=os.environ["MISTRAL_API_KEY"], base_url="https://api.mistral.ai/v1",
             timeout=45, max_retries=0,  # Large 4 peut rester bloqué : on passe au modèle suivant
-        )
+        ) if os.environ.get("MISTRAL_API_KEY") else None
         self.claude = AsyncAnthropic() if os.environ.get("ANTHROPIC_API_KEY") else None
         self.gemini = genai.Client() if os.environ.get("GOOGLE_API_KEY") else None
         self.last: dict = {}
