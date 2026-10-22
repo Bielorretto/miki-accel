@@ -51,16 +51,16 @@
     align-items: center; padding: 70px 32px 24px; min-height: 760px;
   }
   svg.liens { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-  svg.liens path { fill: none; stroke: rgba(140, 210, 200, .07); stroke-width: 1; transition: stroke .2s, stroke-width .2s; }
+  svg.liens path { fill: none; stroke: rgba(140, 210, 200, .13); stroke-width: 1; transition: stroke .2s, stroke-width .2s; }
   svg.liens path.actif { stroke: var(--or); stroke-width: 2; filter: drop-shadow(0 0 6px var(--or)); }
 
-  .colonne { display: grid; grid-template-columns: repeat(4, 76px); grid-auto-rows: 46px; gap: 6px;
-             position: relative; z-index: 1; }
-  .colonne.gauche { justify-self: end; }
-  .colonne.droite { justify-self: start; }
+  /* départements en éventail : chacun au bout d'une corde qui part de l'œil, positionné en JS */
+  .noeuds { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
+  .noeuds .dept { position: absolute; pointer-events: auto; white-space: nowrap; min-width: 58px;
+                  padding: 6px 11px 7px; border-radius: 10px; text-align: center; }
 
   .dept {
-    position: relative; padding: 6px 8px; border-radius: 8px; text-align: left; color: inherit; font: inherit;
+    position: relative; padding: 4px 7px; border-radius: 8px; text-align: left; color: inherit; font: inherit;
     background: rgba(31, 165, 148, var(--intensite, .04)); border: 1px solid var(--card-border);
     cursor: pointer; transition: border-color .15s, transform .15s, box-shadow .15s, opacity .15s;
   }
@@ -70,7 +70,7 @@
   }
   .dept.hors-zone { border-style: dashed; background: transparent; }
   .dept.estompe { opacity: .15; }
-  .dept .num { display: block; font-size: 15px; font-weight: 600; line-height: 1.1; }
+  .dept .num { display: block; font-size: 18px; font-weight: 600; line-height: 1.1; }
   .dept .n { display: block; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; margin-top: 2px; }
   .dept.hors-zone .n { color: var(--faint); }
   .legende { position: absolute; left: 32px; bottom: 18px; z-index: 2; font-size: 11px; color: var(--muted);
@@ -165,7 +165,8 @@
 
 <div class="stage" id="stage">
   <svg class="liens" id="liens"></svg>
-  <div class="colonne gauche" id="gauche"></div>
+  <div class="noeuds" id="noeuds"></div>
+  <div></div>
 
   <div class="centre">
     <div class="halo"></div>
@@ -195,7 +196,7 @@
     </div>
   </div>
 
-  <div class="colonne droite" id="droite"></div>
+  <div></div>
 </div>
 
 <div class="legende"><span>Moins d'appels</span><span class="rampe"></span><span>Plus d'appels</span>
@@ -224,12 +225,12 @@ function placer(e) {
 function cacher() { bulle.style.opacity = 0; }
 
 // ---------- Départements autour de l'œil ----------
-const gauche = document.getElementById("gauche"), droite = document.getElementById("droite");
+const noeuds = document.getElementById("noeuds");
 const liens = document.getElementById("liens"), logo = document.getElementById("logo");
 
 async function chargerDepartements() {
   const depts = await (await fetch(`/api/dihal/departements?source=${source}`)).json();
-  gauche.innerHTML = droite.innerHTML = "";
+  noeuds.innerHTML = "";
   // ordre administratif : la Corse (2A, 2B) se range entre le 19 et le 21
   const cle = c => c.replace("2A", "20.1").replace("2B", "20.2");
   depts.sort((a, b) => cle(a.code).localeCompare(cle(b.code), "fr", { numeric: true }));
@@ -242,15 +243,19 @@ async function chargerDepartements() {
     // intensité proportionnelle au volume (une seule teinte, du clair au soutenu)
     el.style.setProperty("--intensite", d.couvert ? (0.04 + 0.8 * (d.appels || 0) / max).toFixed(3) : 0);
     el.setAttribute("aria-label", `${d.code} ${d.nom}`);
-    el.innerHTML = `<span class="num">${esc(d.code)}</span><span class="n">${d.couvert ? fmt(d.appels) + " appels" : "non couvert"}</span>`;
+    el.innerHTML = `<span class="num">${esc(d.code)}</span><span class="n">${d.couvert ? fmt(d.appels) : "—"}</span>`;
     el.addEventListener("click", () => ouvrir(d.code));
     el.addEventListener("mouseenter", () => lien(d.code)?.classList.add("actif"));
     el.addEventListener("mousemove", e => montrer(e, `<b>${esc(d.code)} · ${esc(d.nom)}</b><small>${esc(d.siao)}</small>` + (d.couvert
       ? `<small>${fmt(d.appels)} appels · ${fmt(d.femmes)} femmes · délai ${d.delai_moyen_s ? Math.round(d.delai_moyen_s / 60) + " min" : "—"} · ${fmt(d.sans_place)} sans place</small>`
       : `<small>Non couvert par MIKI</small>`)));
     el.addEventListener("mouseleave", () => { cacher(); if (selection !== d.code) lien(d.code)?.classList.remove("actif"); });
-    (i < moitie ? gauche : droite).appendChild(el);
+    el.dataset.cote = i < moitie ? "gauche" : "droite";
+    el.dataset.rang = i < moitie ? i : i - moitie;
+    el.dataset.total = i < moitie ? moitie : depts.length - moitie;
+    noeuds.appendChild(el);
   });
+  placer_noeuds();
   filtrer();
   tracerLiens();
   const global = await (await fetch(`/api/dihal/stats?source=${source}`)).json();
@@ -276,23 +281,56 @@ champ.addEventListener("keydown", e => {
 });
 
 const lien = code => liens.querySelector(`path[data-code="${CSS.escape(code)}"]`);
-function tracerLiens() {
+
+// Éventail : de chaque côté de l'œil, les départements sont répartis sur quatre arcs d'ellipse
+// intercalés (le 1er sur l'arc proche, le 2e sur le suivant…), du haut vers le bas dans l'ordre
+// des codes. L'ellipse est plus large que haute pour occuper l'écran ; les cordes ont des
+// longueurs variées et les étiquettes ne se chevauchent pas.
+const ARCS = [0.6, 0.73, 0.86, 1], OUVERTURE = 64 * Math.PI / 180;
+let centre = { x: 0, y: 0, depart: 0 };
+function placer_noeuds() {
   const s = document.getElementById("stage").getBoundingClientRect();
   const l = logo.getBoundingClientRect();
-  const cy = l.top + l.height * 0.62 - s.top, cx = l.left + l.width / 2 - s.left;
+  centre = { x: l.left + l.width / 2 - s.left, y: l.top + l.height * 0.62 - s.top, depart: l.width * 0.45 };
   liens.innerHTML = "";
-  document.querySelectorAll(".dept").forEach(el => {
-    const r = el.getBoundingClientRect(), aGauche = el.parentElement === gauche;
-    const x = (aGauche ? r.right : r.left) - s.left, y = r.top + r.height / 2 - s.top;
-    const depart = cx + (aGauche ? -l.width * 0.45 : l.width * 0.45), mx = (depart + x) / 2;
-    const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    p.setAttribute("d", `M${depart},${cy} C${mx},${cy} ${mx},${y} ${x},${y}`);
-    p.dataset.code = el.dataset.code;
-    if (el.dataset.code === selection) p.classList.add("actif");
-    liens.appendChild(p);
+  const rx = Math.max(300, s.width / 2 - 90);                                       // demi-largeur
+  const ry = Math.max(220, Math.min(centre.y - 95, s.height - centre.y - 55) / Math.sin(OUVERTURE));
+  noeuds.querySelectorAll(".dept").forEach(el => {
+    const rang = +el.dataset.rang, total = +el.dataset.total, arc = rang % ARCS.length;
+    const t = total > 1 ? rang / (total - 1) : 0.5;           // 0 = haut, 1 = bas
+    const angle = -OUVERTURE + 2 * OUVERTURE * t, k = ARCS[arc];
+    const sens = el.dataset.cote === "gauche" ? -1 : 1;
+    el._base = { x: centre.x + sens * rx * k * Math.cos(angle), y: centre.y + ry * k * Math.sin(angle),
+                 phase: Math.random() * Math.PI * 2, periode: 4000 + Math.random() * 3000 };
+    el._corde = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    el._corde.dataset.code = el.dataset.code;
+    liens.appendChild(el._corde);
+  });
+  bouger(performance.now());
+}
+
+// Balancement très léger des étiquettes au bout de leur corde (désactivé si l'utilisateur
+// préfère réduire les animations)
+const calme = matchMedia("(prefers-reduced-motion: reduce)").matches;
+function bouger(t) {
+  noeuds.querySelectorAll(".dept").forEach(el => {
+    const b = el._base, p = el._corde;
+    if (!b) return;
+    const dx = calme ? 0 : Math.sin(t / b.periode * 2 * Math.PI + b.phase) * 2.5;
+    const dy = calme ? 0 : Math.cos(t / (b.periode * 1.3) * 2 * Math.PI + b.phase) * 3.5;
+    const gauche = el.dataset.cote === "gauche", w = el.offsetWidth, h = el.offsetHeight;
+    const x = b.x + dx, y = b.y + dy;
+    el.style.left = (gauche ? x - w : x) + "px";
+    el.style.top = (y - h / 2) + "px";
+    // la corde part du bord de l'œil, file à l'horizontale puis descend ou monte vers l'étiquette
+    const depart = centre.x + (gauche ? -centre.depart : centre.depart), mx = (depart + x) / 2;
+    p.setAttribute("d", `M${depart},${centre.y} C${mx},${centre.y} ${mx + (x - mx) * 0.25},${y} ${x},${y}`);
+    p.classList.toggle("actif", el.dataset.code === selection || el.matches(":hover"));
   });
 }
-addEventListener("resize", tracerLiens);
+(function animer(t) { if (!calme) bouger(t); requestAnimationFrame(animer); })(performance.now());
+const tracerLiens = () => bouger(performance.now());
+addEventListener("resize", placer_noeuds);
 
 // ---------- Panneau de statistiques d'un département ----------
 const panneau = document.getElementById("panneau"), contenu = document.getElementById("contenu");
