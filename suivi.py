@@ -101,11 +101,9 @@ class SuiviAppel:
                 prenoms = " ou ".join(c["prenom"] for c in self.connus)
                 dernier = self.connus[0]["dernier"].strftime("%d/%m")
                 self.notes["reconnaissance"] = (
-                    f"APPELANT DÉJÀ CONNU : ce numéro a déjà appelé le cent quinze (dernier appel le {dernier}), "
-                    f"prénom connu : {prenoms}. Après le consentement, au lieu de demander le prénom, demande : "
-                    f"« Est-ce que je parle bien à {prenoms} ? ». Un téléphone peut être prêté : ne donne aucune "
-                    f"information du dossier avant que la personne ait confirmé son prénom puis son âge. Si elle "
-                    f"dit non, continue normalement avec ses informations à elle.")
+                    f"NUMÉRO DÉJÀ CONNU : ce numéro a déjà appelé le cent quinze (dernier appel le {dernier}), "
+                    f"prénom associé : {prenoms}. Ce n'est pas forcément la même personne (un téléphone se prête) : "
+                    f"ne révèle rien de ce dossier tant qu'elle ne s'est pas présentée avec ce prénom et son âge.")
             logger.info("📞 appel %s ouvert en base (numéro %s%s)", self.appel_id,
                         "haché" if self.tel_hash else "absent",
                         f", {len(self.connus)} appelant(s) déjà connu(s)" if self.connus else "")
@@ -150,21 +148,17 @@ class SuiviAppel:
             self.notes.pop("langue", None)
             return
         if self.langue in LANGUES_PARLEES:
-            note = (f"LANGUE : la transcription indique que l'appelant parle {nom}. Si tu ne lui as pas encore "
-                    f"demandé, pose-lui simplement la question, en français puis en {nom}, sans annoncer de "
-                    f"changement : dans quelle langue préfère-t-il continuer ? Ensuite, parle-lui dans la langue qu'il choisit. Si ses réponses sont en "
-                    f"français, reste en français.")
+            note = (f"LANGUE : la transcription pense que l'appelant parle {nom} (elle se trompe parfois sur les "
+                    f"phrases courtes). Ta voix sait parler {nom}.")
         else:
-            note = (f"LANGUE : l'appelant parle {nom}, que ta voix ne sait pas parler. Continue en français avec "
-                    f"des phrases très courtes et simples, ou en anglais si la personne le comprend mieux.")
+            note = (f"LANGUE : la transcription pense que l'appelant parle {nom}, que ta voix ne sait pas "
+                    f"parler (elle sait le français et l'anglais).")
         if self.departement and self.couvert:
             if self.langue_couverte:
-                note += (f" Un écoutant du cent quinze qui parle {nom} traitera son dossier : dis-le-lui "
-                         f"une fois, pour le rassurer.")
+                note += f" Un écoutant du cent quinze qui parle {nom} traitera son dossier."
             else:
-                note += (f" Aucun écoutant de ce département ne parle {nom} : son dossier est signalé "
-                         f"« langue non couverte » et les équipes s'organiseront ; ne le fais pas porter à la "
-                         f"personne.")
+                note += (f" Aucun écoutant de ce département ne parle {nom} : les équipes s'organiseront "
+                         f"(ce n'est pas à la personne de s'en soucier).")
         self.notes["langue"] = note
 
     async def _attribuer_ecoutant(self, conn) -> None:
@@ -198,13 +192,12 @@ class SuiviAppel:
             dept = max(trouves, key=lambda t: len(t[0]))[1] if trouves else None
         if lieu.homonymes:
             choix = ", ".join(f"{c} ({self._nom_dept(d)})" for c, d in lieu.homonymes)
-            self.notes["lieu"] = (f"LIEU À PRÉCISER : plusieurs communes correspondent à « {lieu.recherche} » : "
-                                  f"{choix}. Demande dans quel département ou quelle commune exacte la personne "
-                                  f"se trouve en ce moment, puis confirme à voix haute.")
+            self.notes["lieu"] = (f"LIEU AMBIGU : plusieurs communes correspondent à « {lieu.recherche} » : "
+                                  f"{choix}. On ne sait pas encore laquelle.")
             return
         if not dept:
-            self.notes["lieu"] = (f"LIEU INTROUVABLE : aucune commune française ne correspond à « {lieu.recherche} ». "
-                                  f"Demande de répéter ou d'épeler le nom de la ville, ou le code postal.")
+            self.notes["lieu"] = (f"LIEU INCONNU : aucune commune française ne correspond à « {lieu.recherche} » "
+                                  f"(peut-être mal entendu).")
             return
         if dept == self.departement:
             return
@@ -217,12 +210,11 @@ class SuiviAppel:
         ville = lieu.commune or self.nom_departement
         if self.couvert:
             self.notes["lieu"] = (
-                f"LIEU IDENTIFIÉ : {ville}, en {self.nom_departement}. Si ce n'est pas déjà fait, confirme-le à "
-                f"voix haute une fois (« Vous êtes bien à {ville}, en {self.nom_departement} ? ») et dis que sa "
-                f"demande sera transmise au cent quinze de {self.nom_departement}.")
+                f"LIEU RECONNU : {ville}, en {self.nom_departement}. Sa demande ira au cent quinze de "
+                f"{self.nom_departement}.")
         else:
             self.notes["lieu"] = (f"ZONE NON COUVERTE : {ville} ({self.nom_departement}) n'est pas encore couvert "
-                                  f"par MIKI. Dis-le avec bienveillance, avec tes mots : {d['orientation']}")
+                                  f"par MIKI. Orientation possible : {d['orientation']}")
         self._note_langue()
         logger.info("📍 %s → département %s (%s)%s", ville, dept, self.nom_departement,
                     "" if self.couvert else ", NON COUVERT")
@@ -252,9 +244,9 @@ class SuiviAppel:
             self.appelant_id = c["id"]
             self.dossier_connu = dict(c)
             self.notes["reconnaissance"] = (
-                f"APPELANT RECONNU : {c['prenom']} a confirmé son prénom et son âge, son dossier existant est repris. "
-                f"Dis-lui que tu retrouves son dossier. Ne redemande ni son nom ni son sexe ; demande seulement "
-                f"ce qui a pu changer depuis son dernier appel (sa situation, l'endroit où la personne se trouve).")
+                f"APPELANT IDENTIFIÉ : c'est bien {c['prenom']} (prénom et âge concordent), son dossier existant "
+                f"est repris : son nom et son sexe sont déjà connus. Ce qui manque, c'est ce qui a changé depuis "
+                f"son dernier appel.")
             logger.info("🔁 appelant reconnu : fiche existante reprise")
             await self._mettre_a_jour_appelant(conn, appelant)
         elif len(correspondances) > 1:
@@ -307,14 +299,12 @@ class SuiviAppel:
         situation = f["libelle"].lower()
         if f["aucune_place"]:
             self.notes["places"] = (
-                f"PLACES : il n'y a plus de place pour sa situation ({situation}) en {self.nom_departement} en ce "
-                f"moment. Dis-le avec délicatesse, une fois. Explique que son dossier est mis en attente et que "
-                f"les équipes du cent quinze seront alertées dès qu'une place se libère. Ne promets rien.")
+                f"PLACES : plus aucune place pour sa situation ({situation}) en {self.nom_departement} en ce "
+                f"moment. Son dossier est mis en attente ; les équipes seront alertées dès qu'une place se libère.")
         else:
             self.notes["places"] = (
                 f"PLACES : il reste en ce moment des places pour sa situation ({situation}) en "
-                f"{self.nom_departement}. Tu peux le lui dire une fois, sans promettre : c'est un écoutant du "
-                f"cent quinze qui attribue les places, selon les priorités.")
+                f"{self.nom_departement}, attribuées par les écoutants selon les priorités.")
 
     # --- analyse du penseur ------------------------------------------------------------
 

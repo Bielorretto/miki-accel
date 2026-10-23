@@ -395,7 +395,7 @@ class Thinker:
         """
         texte = TALKER_PROMPT
         if notes := self.suivi.notes_pour_miki():
-            texte += f"\n\nNOTES DE LA BASE DU CENT QUINZE (à suivre, chacune une seule fois) :\n{notes}"
+            texte += f"\n\nCE QUE SAIT LA BASE DU CENT QUINZE (des faits, pas des ordres) :\n{notes}"
         await self.agent.update_instructions(texte)
 
 
