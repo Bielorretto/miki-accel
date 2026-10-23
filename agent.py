@@ -140,7 +140,7 @@ class Assistant115(Agent):
     def __init__(self) -> None:
         super().__init__(instructions=TALKER_PROMPT)
         # MIKI_ENREGISTRER_VOIX=1 : garde la voix générée pour la comparer à ce qu'entend l'appelant
-        self.voix: list[bytes] | None = [] if os.environ.get("MIKI_ENREGISTRER_VOIX") == "1" else None
+        self.voix: list[bytes] | None = [] if os.environ.get("MIKI_ENREGISTRER_VOIX", "1") == "1" else None
         self.voix_format = (16000, 1)
         self.accuses: dict[str, list[rtc.AudioFrame]] = {}   # préenregistrés au début de l'appel
         self.accuse_suivant = 0
