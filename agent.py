@@ -571,6 +571,24 @@ def prewarm(proc: JobProcess) -> None:
     )
 
 
+async def garder_voix_en_base(agent: Assistant115, suivi: SuiviAppel, call_id: str) -> None:
+    """Diagnostic du hachage (MIKI_ENREGISTRER_VOIX=1) : la voix telle que l'agent l'envoie, avant tout
+    transport, est rangée en base pour être relue depuis un poste (tests/etapes_appel.py) ; le disque
+    du conteneur n'est pas accessible."""
+    if not agent.voix or suivi.pool is None:
+        return
+    taux, audio = agent.voix_format[0], b"".join(agent.voix)
+    try:
+        async with suivi.pool.acquire() as conn:
+            await conn.execute("CREATE TABLE IF NOT EXISTS diagnostic_voix (appel text PRIMARY KEY, cree timestamptz "
+                               "NOT NULL DEFAULT now(), taux int NOT NULL, audio bytea NOT NULL)")
+            await conn.execute("INSERT INTO diagnostic_voix (appel, taux, audio) VALUES ($1, $2, $3) "
+                               "ON CONFLICT DO NOTHING", call_id, taux, audio)
+        logger.info("🎙 voix de l'appel gardée en base pour diagnostic (%.0f s)", len(audio) / 2 / taux)
+    except Exception:
+        logger.exception("voix de diagnostic non enregistrée")
+
+
 # laisse le temps à l'analyse finale du penseur avant de couper le process
 server = AgentServer(setup_fnc=prewarm, shutdown_process_timeout=30)
 
@@ -691,6 +709,7 @@ async def entrypoint(ctx: JobContext) -> None:
         (LIVE_DIR / f"{call_id}.json").unlink(missing_ok=True)
         agent.sauver_voix(OUT_DIR / f"{call_id}-voix.wav")
         await suivi_pret
+        await garder_voix_en_base(agent, suivi, call_id)
         await suivi.clore()
         logger.info("📋 Dossier créé :\n%s", json.dumps(appel, ensure_ascii=False, indent=2))
         logger.info("📊 Latence : %s — résultats dans %s", latency.summary(), OUT_DIR)
