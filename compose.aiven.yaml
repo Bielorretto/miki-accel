@@ -20,8 +20,9 @@ services:
       dockerfile: Dockerfile.agent
     environment:
       DB_POOL_MAX: "3"
-      # Sonnet 5.5 : seul modèle du banc d'essai à tenir la conversation sans redemander ; Haiku en secours
-      TALKER_MODEL: "claude:claude-sonnet-5-5,claude:claude-haiku-5-5"
+      # Sonnet 5.5 : seul modèle du banc d'essai à tenir la conversation sans redemander ; Haiku en secours,
+      # puis Groq : si la clé Anthropic ne passe plus, MIKI parle quand même (sinon il reste muet)
+      TALKER_MODEL: "claude:claude-sonnet-5-5,claude:claude-haiku-5-5,openai/gpt-oss-120b"
       THINKER_MODELS: "claude:claude-haiku-5-5,groq:openai/gpt-oss-120b"
       # Deepgram : ElevenLabs ne validait pas les phrases au téléphone (et transcrivait parfois en russe)
       STT_PROVIDER: "deepgram"
